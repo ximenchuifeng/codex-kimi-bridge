@@ -2,7 +2,7 @@ import type { BridgeConfig } from './config.js';
 import { buildContinuationPrompt, buildDelegationPrompt } from './prompt.js';
 import type { KimiHandoff } from './handoff.js';
 import type { KimiClient } from './kimi/client.js';
-import { waitUntilIdle } from './kimi/wait.js';
+import { waitUntilIdle, type WaitUntilIdleResult } from './kimi/wait.js';
 import { buildHandoff } from './handoff.js';
 
 export interface ToolDeps {
@@ -51,7 +51,7 @@ export interface AbortInput {
 
 export interface ToolHandlers {
   kimi_delegate_task: (input: DelegateTaskInput) => Promise<{ sessionId: string; promptId: string; status: string }>;
-  kimi_wait_until_idle: (input: WaitUntilIdleInput) => Promise<{ status: string }>;
+  kimi_wait_until_idle: (input: WaitUntilIdleInput) => Promise<WaitUntilIdleResult>;
   kimi_get_handoff: (input: GetHandoffInput) => Promise<KimiHandoff>;
   kimi_continue_task: (input: ContinueTaskInput) => Promise<{ sessionId: string; promptId: string; status: string }>;
   kimi_get_diff: (input: GetDiffInput) => Promise<{ path: string; diff: string }>;
@@ -99,6 +99,18 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
         timeoutMs: input.timeoutMs ?? deps.config.requestTimeoutMs,
         pollStatus: () => deps.kimi.getStatus(input.sessionId),
       });
+      if (result.status === 'awaiting_approval') {
+        return {
+          status: result.status,
+          approvals: await deps.kimi.listPendingApprovals(input.sessionId),
+        };
+      }
+      if (result.status === 'awaiting_question') {
+        return {
+          status: result.status,
+          questions: await deps.kimi.listPendingQuestions(input.sessionId),
+        };
+      }
       return result;
     },
 

@@ -46,13 +46,21 @@ describe('KimiClient', () => {
     expect(http.post).toHaveBeenCalledWith('/sessions/s1:abort');
   });
 
-  it('reads the default model from server config', async () => {
+  it('lists pending approvals and questions', async () => {
     const http: HttpPort = {
       post: vi.fn(),
-      get: vi.fn(async () => ({ default_model: 'kimi-k2' })) as HttpPort['get'],
+      get: vi.fn(async (path: string) => {
+        if (path.includes('/approvals')) return { items: [{ approval_id: 'a1', tool_name: 'Bash' }] };
+        if (path.includes('/questions')) return { items: [{ question_id: 'q1', questions: [] }] };
+        return {};
+      }) as HttpPort['get'],
     };
     const client = new KimiClient(http);
-    await expect(client.resolveDefaultModel()).resolves.toBe('kimi-k2');
-    expect(http.get).toHaveBeenCalledWith('/config');
+
+    await expect(client.listPendingApprovals('s1')).resolves.toEqual([{ approval_id: 'a1', tool_name: 'Bash' }]);
+    await expect(client.listPendingQuestions('s1')).resolves.toEqual([{ question_id: 'q1', questions: [] }]);
+
+    expect(http.get).toHaveBeenCalledWith('/sessions/s1/approvals', { status: 'pending' });
+    expect(http.get).toHaveBeenCalledWith('/sessions/s1/questions', { status: 'pending' });
   });
 });

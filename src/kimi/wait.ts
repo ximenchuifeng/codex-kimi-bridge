@@ -1,8 +1,11 @@
+import type { PendingApproval, PendingQuestion } from './types.js';
+
 export type KimiSessionRuntimeStatus = 'idle' | 'running' | 'awaiting_approval' | 'awaiting_question' | 'aborted';
 
-export interface WaitUntilIdleResult {
-  status: 'idle' | 'awaiting_approval' | 'awaiting_question' | 'aborted' | 'timeout';
-}
+export type WaitUntilIdleResult =
+  | { status: 'idle' | 'aborted' | 'timeout' }
+  | { status: 'awaiting_approval'; approvals?: PendingApproval[] }
+  | { status: 'awaiting_question'; questions?: PendingQuestion[] };
 
 export interface WaitUntilIdleInput {
   sessionId: string;

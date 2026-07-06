@@ -44,6 +44,14 @@ export async function startFakeKimiServer(): Promise<FakeKimiServer> {
       res.end(envelope({ aborted: true }));
       return;
     }
+    if (req.method === 'GET' && req.url === '/api/v1/sessions/s1/approvals?status=pending') {
+      res.end(envelope({ items: [{ approval_id: 'a1', tool_name: 'Bash' }] }));
+      return;
+    }
+    if (req.method === 'GET' && req.url === '/api/v1/sessions/s1/questions?status=pending') {
+      res.end(envelope({ items: [{ question_id: 'q1', questions: [] }] }));
+      return;
+    }
     res.end(JSON.stringify({ code: 40401, msg: `not found: ${req.method} ${req.url}`, data: {}, request_id: 'req_404' }));
   });
 

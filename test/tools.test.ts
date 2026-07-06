@@ -11,6 +11,9 @@ function makeKimi(overrides: Record<string, unknown> = {}): KimiClient {
     getGitStatus: vi.fn(async () => ({ entries: {}, additions: 0, deletions: 0 })) as unknown as KimiClient['getGitStatus'],
     getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '' })) as unknown as KimiClient['getFileDiff'],
     abortSession: vi.fn(async () => undefined) as unknown as KimiClient['abortSession'],
+    resolveDefaultModel: vi.fn(async () => 'kimi-k2') as unknown as KimiClient['resolveDefaultModel'],
+    listPendingApprovals: vi.fn(async () => []) as unknown as KimiClient['listPendingApprovals'],
+    listPendingQuestions: vi.fn(async () => []) as unknown as KimiClient['listPendingQuestions'],
     ...overrides,
   } as KimiClient;
 }
@@ -140,25 +143,29 @@ describe('tool handlers', () => {
     })).rejects.toThrow(/model/);
   });
 
-  it('falls back to Kimi server default_model when KIMI_MODEL is unset', async () => {
+  it('returns pending approvals when Kimi waits for approval', async () => {
     const kimi = makeKimi({
-      resolveDefaultModel: vi.fn(async () => 'kimi-k2'),
+      getStatus: vi.fn(async () => ({ status: 'awaiting_approval' })),
+      listPendingApprovals: vi.fn(async () => [{ approval_id: 'a1', tool_name: 'Bash' }]),
     });
-    const handlers = createToolHandlers({
-      kimi: kimi as never,
-      config: makeConfig({ defaultModel: undefined }),
-    });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig() });
 
-    await handlers.kimi_delegate_task({
-      cwd: '/repo',
-      task: 'implement x',
-      acceptanceCriteria: ['passes tests'],
-      plan: ['edit code'],
+    await expect(handlers.kimi_wait_until_idle({ sessionId: 's1' })).resolves.toEqual({
+      status: 'awaiting_approval',
+      approvals: [{ approval_id: 'a1', tool_name: 'Bash' }],
     });
+  });
 
-    expect(kimi.submitPrompt).toHaveBeenCalledWith(
-      's1',
-      expect.objectContaining({ model: 'kimi-k2' }),
-    );
+  it('returns pending questions when Kimi waits for a question', async () => {
+    const kimi = makeKimi({
+      getStatus: vi.fn(async () => ({ status: 'awaiting_question' })),
+      listPendingQuestions: vi.fn(async () => [{ question_id: 'q1', questions: [] }]),
+    });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig() });
+
+    await expect(handlers.kimi_wait_until_idle({ sessionId: 's1' })).resolves.toEqual({
+      status: 'awaiting_question',
+      questions: [{ question_id: 'q1', questions: [] }],
+    });
   });
 });

@@ -1,5 +1,5 @@
 import type { KimiHttpClient } from './http.js';
-import type { KimiServerConfig, PermissionMode, PromptSubmitResult, SessionStatus, WireSession } from './types.js';
+import type { KimiServerConfig, PendingApproval, PendingQuestion, PermissionMode, PromptSubmitResult, SessionStatus, WireSession } from './types.js';
 
 export interface HttpPort {
   get<T>(path: string, query?: Record<string, string | number | boolean | undefined>): Promise<T>;
@@ -86,5 +86,21 @@ export class KimiClient {
     const config = await this.getConfig();
     const model = config.default_model;
     return model && model.trim().length > 0 ? model : undefined;
+  }
+
+  async listPendingApprovals(sessionId: string): Promise<PendingApproval[]> {
+    const page = await this.http.get<{ items: PendingApproval[] }>(
+      `/sessions/${encodeURIComponent(sessionId)}/approvals`,
+      { status: 'pending' },
+    );
+    return page.items;
+  }
+
+  async listPendingQuestions(sessionId: string): Promise<PendingQuestion[]> {
+    const page = await this.http.get<{ items: PendingQuestion[] }>(
+      `/sessions/${encodeURIComponent(sessionId)}/questions`,
+      { status: 'pending' },
+    );
+    return page.items;
   }
 }

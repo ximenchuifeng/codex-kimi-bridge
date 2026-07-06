@@ -38,3 +38,13 @@ export interface SessionStatus {
 export interface KimiServerConfig {
   default_model?: string;
 }
+
+export interface PendingApproval {
+  approval_id: string;
+  [key: string]: unknown;
+}
+
+export interface PendingQuestion {
+  question_id: string;
+  [key: string]: unknown;
+}
