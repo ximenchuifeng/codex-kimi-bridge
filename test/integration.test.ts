@@ -35,5 +35,7 @@ describe('bridge integration', () => {
 
     const diff = await kimi.getFileDiff(session.id, 'src/a.ts');
     expect(diff).toEqual({ path: 'src/a.ts', diff: '@@ fake diff' });
+
+    await expect(kimi.abortSession(session.id)).resolves.toEqual({ aborted: true });
   });
 });

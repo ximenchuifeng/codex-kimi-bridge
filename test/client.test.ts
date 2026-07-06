@@ -36,14 +36,14 @@ describe('KimiClient', () => {
     });
   });
 
-  it('aborts a session', async () => {
+  it('aborts a session with the real Kimi action suffix route', async () => {
     const http: HttpPort = {
-      post: vi.fn(async () => undefined) as HttpPort['post'],
+      post: vi.fn(async () => ({ aborted: true })) as HttpPort['post'],
       get: vi.fn(),
     };
     const client = new KimiClient(http);
-    await client.abortSession('s1');
-    expect(http.post).toHaveBeenCalledWith('/sessions/s1/abort');
+    await expect(client.abortSession('s1')).resolves.toEqual({ aborted: true });
+    expect(http.post).toHaveBeenCalledWith('/sessions/s1:abort');
   });
 
   it('reads the default model from server config', async () => {

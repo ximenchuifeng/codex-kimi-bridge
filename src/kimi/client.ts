@@ -74,8 +74,8 @@ export class KimiClient {
     return this.http.post(`/sessions/${encodeURIComponent(sessionId)}/fs:diff`, { path });
   }
 
-  abortSession(sessionId: string): Promise<void> {
-    return this.http.post(`/sessions/${encodeURIComponent(sessionId)}/abort`);
+  abortSession(sessionId: string): Promise<{ aborted: boolean }> {
+    return this.http.post(`/sessions/${encodeURIComponent(sessionId)}:abort`);
   }
 
   getConfig(): Promise<KimiServerConfig> {

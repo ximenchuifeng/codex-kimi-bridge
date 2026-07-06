@@ -40,6 +40,10 @@ export async function startFakeKimiServer(): Promise<FakeKimiServer> {
       res.end(envelope({ default_model: 'kimi-k2' }));
       return;
     }
+    if (req.method === 'POST' && req.url === '/api/v1/sessions/s1:abort') {
+      res.end(envelope({ aborted: true }));
+      return;
+    }
     res.end(JSON.stringify({ code: 40401, msg: `not found: ${req.method} ${req.url}`, data: {}, request_id: 'req_404' }));
   });
 
