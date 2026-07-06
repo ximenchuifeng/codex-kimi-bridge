@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "kimi-delegate": {
+      "command": "node",
+      "args": [
+        "../../dist/index.js"
+      ],
+      "env": {
+        "KIMI_SERVER_URL": "http://127.0.0.1:58627",
+        "KIMI_PERMISSION_MODE": "auto",
+        "KIMI_THINKING": "high"
+      }
+    }
+  }
+}

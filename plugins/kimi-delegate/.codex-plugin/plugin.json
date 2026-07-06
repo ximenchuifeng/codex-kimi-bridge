@@ -1,0 +1,11 @@
+{
+  "name": "kimi-delegate",
+  "version": "0.1.0",
+  "description": "Delegate implementation tasks from Codex to Kimi Code through a local MCP bridge.",
+  "mcp": {
+    "config": "../.mcp.json"
+  },
+  "skills": {
+    "path": "skills"
+  }
+}
