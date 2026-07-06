@@ -45,6 +45,20 @@ Default bridge target:
 http://127.0.0.1:58627
 ```
 
+## Model Resolution
+
+The bridge resolves the Kimi model in this order:
+
+1. `model` passed to the MCP tool call
+2. `KIMI_MODEL` environment variable
+3. Kimi server `default_model` from `/api/v1/config`
+
+If none are available, the MCP tool returns a structured error. For predictable local use, set:
+
+```bash
+export KIMI_MODEL=<your-kimi-model>
+```
+
 ## Collaboration Model
 
 Codex:
