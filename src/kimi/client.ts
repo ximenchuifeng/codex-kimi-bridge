@@ -1,9 +1,9 @@
 import type { KimiHttpClient } from './http.js';
 import type { PermissionMode, PromptSubmitResult, SessionStatus, WireSession } from './types.js';
 
-interface HttpPort {
-  get(path: string, query?: Record<string, string | number | boolean | undefined>): Promise<any>;
-  post(path: string, body?: unknown): Promise<any>;
+export interface HttpPort {
+  get<T>(path: string, query?: Record<string, string | number | boolean | undefined>): Promise<T>;
+  post<T>(path: string, body?: unknown): Promise<T>;
 }
 
 export interface CreateSessionInput {
