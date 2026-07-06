@@ -2,9 +2,48 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { loadBridgeConfig } from './config.js';
+import { KimiApiError, KimiNetworkError } from './errors.js';
 import { KimiHttpClient } from './kimi/http.js';
 import { KimiClient } from './kimi/client.js';
 import { createToolHandlers } from './tools.js';
+
+export async function runToolHandler(handler: () => Promise<unknown>): Promise<{
+  content: [{ type: 'text'; text: string }];
+  isError?: true;
+}> {
+  try {
+    const result = await handler();
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+  } catch (error) {
+    if (error instanceof KimiApiError) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({ error: error.message, code: error.code, requestId: error.requestId }),
+          },
+        ],
+        isError: true,
+      };
+    }
+    if (error instanceof KimiNetworkError) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({ error: error.message, code: 'NETWORK', requestId: undefined }),
+          },
+        ],
+        isError: true,
+      };
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      content: [{ type: 'text', text: JSON.stringify({ error: message, code: 'UNKNOWN', requestId: undefined }) }],
+      isError: true,
+    };
+  }
+}
 
 export async function main(): Promise<void> {
   const config = loadBridgeConfig();
@@ -24,9 +63,7 @@ export async function main(): Promise<void> {
       model: z.string().optional(),
       thinking: z.string().optional(),
     },
-    async (input) => ({
-      content: [{ type: 'text', text: JSON.stringify(await handlers.kimi_delegate_task(input), null, 2) }],
-    }),
+    async (input) => runToolHandler(() => handlers.kimi_delegate_task(input)),
   );
 
   server.tool(
@@ -35,9 +72,7 @@ export async function main(): Promise<void> {
       sessionId: z.string(),
       timeoutMs: z.number().optional(),
     },
-    async (input) => ({
-      content: [{ type: 'text', text: JSON.stringify(await handlers.kimi_wait_until_idle(input), null, 2) }],
-    }),
+    async (input) => runToolHandler(() => handlers.kimi_wait_until_idle(input)),
   );
 
   server.tool(
@@ -45,9 +80,7 @@ export async function main(): Promise<void> {
     {
       sessionId: z.string(),
     },
-    async (input) => ({
-      content: [{ type: 'text', text: JSON.stringify(await handlers.kimi_get_handoff(input), null, 2) }],
-    }),
+    async (input) => runToolHandler(() => handlers.kimi_get_handoff(input)),
   );
 
   server.tool(
@@ -61,9 +94,7 @@ export async function main(): Promise<void> {
       model: z.string().optional(),
       thinking: z.string().optional(),
     },
-    async (input) => ({
-      content: [{ type: 'text', text: JSON.stringify(await handlers.kimi_continue_task(input), null, 2) }],
-    }),
+    async (input) => runToolHandler(() => handlers.kimi_continue_task(input)),
   );
 
   server.tool(
@@ -72,9 +103,7 @@ export async function main(): Promise<void> {
       sessionId: z.string(),
       path: z.string(),
     },
-    async (input) => ({
-      content: [{ type: 'text', text: JSON.stringify(await handlers.kimi_get_diff(input), null, 2) }],
-    }),
+    async (input) => runToolHandler(() => handlers.kimi_get_diff(input)),
   );
 
   server.tool(
@@ -82,9 +111,7 @@ export async function main(): Promise<void> {
     {
       sessionId: z.string(),
     },
-    async (input) => ({
-      content: [{ type: 'text', text: JSON.stringify(await handlers.kimi_abort(input), null, 2) }],
-    }),
+    async (input) => runToolHandler(() => handlers.kimi_abort(input)),
   );
 
   await server.connect(new StdioServerTransport());

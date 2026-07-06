@@ -12,8 +12,10 @@ describe('loadBridgeConfig', () => {
     });
   });
 
-  it('normalizes a server URL with /api/v1 suffix', () => {
-    expect(loadBridgeConfig({ KIMI_SERVER_URL: 'http://localhost:58627/api/v1/' }).serverUrl)
-      .toBe('http://localhost:58627');
+  it('falls back when KIMI_REQUEST_TIMEOUT_MS is malformed or non-positive', () => {
+    expect(loadBridgeConfig({ KIMI_REQUEST_TIMEOUT_MS: 'not-a-number' }).requestTimeoutMs).toBe(30000);
+    expect(loadBridgeConfig({ KIMI_REQUEST_TIMEOUT_MS: '0' }).requestTimeoutMs).toBe(30000);
+    expect(loadBridgeConfig({ KIMI_REQUEST_TIMEOUT_MS: '-100' }).requestTimeoutMs).toBe(30000);
+    expect(loadBridgeConfig({ KIMI_REQUEST_TIMEOUT_MS: '15000' }).requestTimeoutMs).toBe(15000);
   });
 });

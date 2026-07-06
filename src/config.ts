@@ -14,6 +14,12 @@ function normalizeServerUrl(raw: string): string {
   return url.toString().replace(/\/$/, '');
 }
 
+function parseRequestTimeoutMs(raw: string | undefined): number {
+  const parsed = Number.parseInt(raw ?? '30000', 10);
+  if (Number.isNaN(parsed) || parsed <= 0) return 30000;
+  return parsed;
+}
+
 export function loadBridgeConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
   const permission = env.KIMI_PERMISSION_MODE;
   const defaultPermissionMode =
@@ -26,6 +32,6 @@ export function loadBridgeConfig(env: NodeJS.ProcessEnv = process.env): BridgeCo
     defaultModel: env.KIMI_MODEL && env.KIMI_MODEL.trim().length > 0 ? env.KIMI_MODEL : undefined,
     defaultThinking: env.KIMI_THINKING && env.KIMI_THINKING.trim().length > 0 ? env.KIMI_THINKING : 'high',
     defaultPermissionMode,
-    requestTimeoutMs: Number.parseInt(env.KIMI_REQUEST_TIMEOUT_MS ?? '30000', 10),
+    requestTimeoutMs: parseRequestTimeoutMs(env.KIMI_REQUEST_TIMEOUT_MS),
   };
 }

@@ -1,5 +1,3 @@
-import WebSocket from 'ws';
-
 export type KimiSessionRuntimeStatus = 'idle' | 'running' | 'awaiting_approval' | 'awaiting_question' | 'aborted';
 
 export interface WaitUntilIdleResult {
@@ -15,21 +13,6 @@ export interface WaitUntilIdleInput {
 export function deriveWaitResult(input: { status: KimiSessionRuntimeStatus }): WaitUntilIdleResult | null {
   if (input.status === 'running') return null;
   return { status: input.status };
-}
-
-export class KimiEventWatcher {
-  constructor(private readonly serverUrl: string) {}
-
-  wsUrl(clientId: string): string {
-    const url = new URL(`${this.serverUrl}/api/v1/ws`);
-    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-    url.searchParams.set('client_id', clientId);
-    return url.toString();
-  }
-
-  createSocket(clientId: string): WebSocket {
-    return new WebSocket(this.wsUrl(clientId));
-  }
 }
 
 export async function waitUntilIdle(input: WaitUntilIdleInput): Promise<WaitUntilIdleResult> {

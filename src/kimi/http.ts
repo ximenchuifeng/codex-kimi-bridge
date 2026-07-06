@@ -3,6 +3,26 @@ import type { Envelope } from './types.js';
 
 type FetchLike = typeof fetch;
 
+interface ErrorEnvelope {
+  code: number;
+  msg: string;
+  request_id: string;
+  details?: unknown;
+}
+
+function isErrorEnvelope(value: unknown): value is ErrorEnvelope {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'code' in value &&
+    typeof (value as Record<string, unknown>).code === 'number' &&
+    'msg' in value &&
+    typeof (value as Record<string, unknown>).msg === 'string' &&
+    'request_id' in value &&
+    typeof (value as Record<string, unknown>).request_id === 'string'
+  );
+}
+
 export class KimiHttpClient {
   constructor(
     private readonly serverUrl: string,
@@ -46,17 +66,34 @@ export class KimiHttpClient {
       clearTimeout(timeout);
     }
 
+    let bodyText: string;
+    try {
+      bodyText = await response.text();
+    } catch (error) {
+      throw new KimiNetworkError(`Failed to read response body from ${method} ${path}`, error);
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(bodyText);
+    } catch {
+      parsed = undefined;
+    }
+
     if (!response.ok) {
+      if (isErrorEnvelope(parsed)) {
+        throw new KimiApiError(parsed.code, parsed.msg, parsed.request_id, parsed.details);
+      }
       throw new KimiApiError(response.status, `HTTP error ${response.status} ${response.statusText}`, undefined);
     }
 
-    let envelope: Envelope<T>;
-    try {
-      envelope = (await response.json()) as Envelope<T>;
-    } catch (error) {
-      throw new KimiNetworkError(`Failed to parse JSON response from ${method} ${path}`, error);
+    const envelope = parsed as Envelope<T> | undefined;
+    if (!envelope || typeof envelope.code !== 'number') {
+      throw new KimiNetworkError(
+        `Failed to parse JSON response from ${method} ${path}`,
+        new SyntaxError('Response body is not a Kimi envelope'),
+      );
     }
-
     if (envelope.code !== 0) {
       throw new KimiApiError(envelope.code, envelope.msg, envelope.request_id, envelope.details);
     }

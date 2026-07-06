@@ -38,6 +38,23 @@ describe('KimiHttpClient', () => {
     });
   });
 
+  it('preserves envelope details on non-2xx HTTP responses', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      code: 40001,
+      msg: 'bad request',
+      request_id: 'req_bad',
+      details: { field: 'name' },
+    }), { status: 400, statusText: 'Bad Request' }));
+    const client = new KimiHttpClient('http://127.0.0.1:58627', fetchImpl);
+    await expect(client.get('/sessions')).rejects.toEqual(expect.objectContaining({
+      name: 'KimiApiError',
+      code: 40001,
+      message: 'bad request',
+      requestId: 'req_bad',
+      details: { field: 'name' },
+    }));
+  });
+
   it('throws KimiNetworkError on JSON parse failure', async () => {
     const fetchImpl = vi.fn(async () => new Response('not json'));
     const client = new KimiHttpClient('http://127.0.0.1:58627', fetchImpl);
