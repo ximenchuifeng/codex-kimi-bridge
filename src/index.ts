@@ -24,15 +24,9 @@ export async function main(): Promise<void> {
       model: z.string().optional(),
       thinking: z.string().optional(),
     },
-    async (input) => {
-      try {
-        const result = await handlers.kimi_delegate_task(input);
-        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }] };
-      }
-    },
+    async (input) => ({
+      content: [{ type: 'text', text: JSON.stringify(await handlers.kimi_delegate_task(input), null, 2) }],
+    }),
   );
 
   await server.connect(new StdioServerTransport());
