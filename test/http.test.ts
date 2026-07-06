@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { KimiApiError } from '../src/errors.js';
+import { KimiApiError, KimiNetworkError } from '../src/errors.js';
 import { KimiHttpClient } from '../src/kimi/http.js';
 
 describe('KimiHttpClient', () => {
@@ -27,5 +27,20 @@ describe('KimiHttpClient', () => {
     })));
     const client = new KimiHttpClient('http://127.0.0.1:58627', fetchImpl);
     await expect(client.get('/sessions')).rejects.toBeInstanceOf(KimiApiError);
+  });
+
+  it('throws KimiApiError on non-2xx HTTP responses', async () => {
+    const fetchImpl = vi.fn(async () => new Response('bad gateway', { status: 502, statusText: 'Bad Gateway' }));
+    const client = new KimiHttpClient('http://127.0.0.1:58627', fetchImpl);
+    await expect(client.get('/sessions')).rejects.toMatchObject({
+      name: 'KimiApiError',
+      code: 502,
+    });
+  });
+
+  it('throws KimiNetworkError on JSON parse failure', async () => {
+    const fetchImpl = vi.fn(async () => new Response('not json'));
+    const client = new KimiHttpClient('http://127.0.0.1:58627', fetchImpl);
+    await expect(client.get('/sessions')).rejects.toBeInstanceOf(KimiNetworkError);
   });
 });

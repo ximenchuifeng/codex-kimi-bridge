@@ -12,7 +12,7 @@ export class KimiApiError extends Error {
 
 export class KimiNetworkError extends Error {
   constructor(message: string, readonly cause: unknown) {
-    super(message);
+    super(message, { cause });
     this.name = 'KimiNetworkError';
   }
 }

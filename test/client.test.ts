@@ -35,4 +35,14 @@ describe('KimiClient', () => {
       swarm_mode: true,
     });
   });
+
+  it('aborts a session', async () => {
+    const http: HttpPort = {
+      post: vi.fn(async () => undefined) as HttpPort['post'],
+      get: vi.fn(),
+    };
+    const client = new KimiClient(http);
+    await client.abortSession('s1');
+    expect(http.post).toHaveBeenCalledWith('/sessions/s1/abort');
+  });
 });

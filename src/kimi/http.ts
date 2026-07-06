@@ -7,6 +7,7 @@ export class KimiHttpClient {
   constructor(
     private readonly serverUrl: string,
     private readonly fetchImpl: FetchLike = fetch,
+    private readonly requestTimeoutMs: number = 30000,
   ) {}
 
   async get<T>(path: string, query?: Record<string, string | number | boolean | undefined>): Promise<T> {
@@ -28,18 +29,34 @@ export class KimiHttpClient {
       if (value !== undefined) url.searchParams.set(key, String(value));
     }
 
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs);
+
     let response: Response;
     try {
       response = await this.fetchImpl(url.toString(), {
         method,
         headers: body === undefined ? undefined : { 'content-type': 'application/json' },
         body: body === undefined ? undefined : JSON.stringify(body),
+        signal: controller.signal,
       });
     } catch (error) {
       throw new KimiNetworkError(`Network error calling ${method} ${path}`, error);
+    } finally {
+      clearTimeout(timeout);
     }
 
-    const envelope = (await response.json()) as Envelope<T>;
+    if (!response.ok) {
+      throw new KimiApiError(response.status, `HTTP error ${response.status} ${response.statusText}`, undefined);
+    }
+
+    let envelope: Envelope<T>;
+    try {
+      envelope = (await response.json()) as Envelope<T>;
+    } catch (error) {
+      throw new KimiNetworkError(`Failed to parse JSON response from ${method} ${path}`, error);
+    }
+
     if (envelope.code !== 0) {
       throw new KimiApiError(envelope.code, envelope.msg, envelope.request_id, envelope.details);
     }

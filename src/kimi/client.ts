@@ -73,4 +73,8 @@ export class KimiClient {
   getFileDiff(sessionId: string, path: string): Promise<{ path: string; diff: string }> {
     return this.http.post(`/sessions/${encodeURIComponent(sessionId)}/fs:diff`, { path });
   }
+
+  abortSession(sessionId: string): Promise<void> {
+    return this.http.post(`/sessions/${encodeURIComponent(sessionId)}/abort`);
+  }
 }
