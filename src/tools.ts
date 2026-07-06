@@ -1,7 +1,8 @@
 import type { BridgeConfig } from './config.js';
 import { buildContinuationPrompt, buildDelegationPrompt } from './prompt.js';
+import type { KimiHandoff } from './handoff.js';
 import type { KimiClient } from './kimi/client.js';
-import { waitUntilIdle } from './kimi/ws.js';
+import { waitUntilIdle } from './kimi/wait.js';
 import { buildHandoff } from './handoff.js';
 
 export interface ToolDeps {
@@ -51,7 +52,7 @@ export interface AbortInput {
 export interface ToolHandlers {
   kimi_delegate_task: (input: DelegateTaskInput) => Promise<{ sessionId: string; promptId: string; status: string }>;
   kimi_wait_until_idle: (input: WaitUntilIdleInput) => Promise<{ status: string }>;
-  kimi_get_handoff: (input: GetHandoffInput) => Promise<import('./handoff.js').KimiHandoff>;
+  kimi_get_handoff: (input: GetHandoffInput) => Promise<KimiHandoff>;
   kimi_continue_task: (input: ContinueTaskInput) => Promise<{ sessionId: string; promptId: string; status: string }>;
   kimi_get_diff: (input: GetDiffInput) => Promise<{ path: string; diff: string }>;
   kimi_abort: (input: AbortInput) => Promise<{ sessionId: string; aborted: true }>;

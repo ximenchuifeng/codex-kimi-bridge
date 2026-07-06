@@ -18,4 +18,9 @@ describe('loadBridgeConfig', () => {
     expect(loadBridgeConfig({ KIMI_REQUEST_TIMEOUT_MS: '-100' }).requestTimeoutMs).toBe(30000);
     expect(loadBridgeConfig({ KIMI_REQUEST_TIMEOUT_MS: '15000' }).requestTimeoutMs).toBe(15000);
   });
+
+  it('normalizes a server URL with /api/v1 suffix and trailing slash', () => {
+    expect(loadBridgeConfig({ KIMI_SERVER_URL: 'http://localhost:58627/api/v1/' }).serverUrl)
+      .toBe('http://localhost:58627');
+  });
 });

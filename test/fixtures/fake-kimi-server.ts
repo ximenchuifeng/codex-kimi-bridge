@@ -20,6 +20,22 @@ export async function startFakeKimiServer(): Promise<FakeKimiServer> {
       res.end(envelope({ prompt_id: 'p1', user_message_id: 'm1', status: 'running' }));
       return;
     }
+    if (req.method === 'GET' && req.url === '/api/v1/sessions/s1/messages') {
+      res.end(envelope({
+        items: [
+          { id: 'm1', role: 'assistant', content: [{ type: 'text', text: 'Implementation complete.' }] },
+        ],
+      }));
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/api/v1/sessions/s1/fs:git_status') {
+      res.end(envelope({ entries: { 'src/a.ts': 'M' }, additions: 10, deletions: 2 }));
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/api/v1/sessions/s1/fs:diff') {
+      res.end(envelope({ path: 'src/a.ts', diff: '@@ fake diff' }));
+      return;
+    }
     res.end(JSON.stringify({ code: 40401, msg: `not found: ${req.method} ${req.url}`, data: {}, request_id: 'req_404' }));
   });
 

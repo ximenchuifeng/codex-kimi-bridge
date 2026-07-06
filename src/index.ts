@@ -7,6 +7,13 @@ import { KimiHttpClient } from './kimi/http.js';
 import { KimiClient } from './kimi/client.js';
 import { createToolHandlers } from './tools.js';
 
+function summarizeCause(cause: unknown): unknown {
+  if (cause instanceof Error) {
+    return { name: cause.name, message: cause.message };
+  }
+  return String(cause);
+}
+
 export async function runToolHandler(handler: () => Promise<unknown>): Promise<{
   content: [{ type: 'text'; text: string }];
   isError?: true;
@@ -20,7 +27,12 @@ export async function runToolHandler(handler: () => Promise<unknown>): Promise<{
         content: [
           {
             type: 'text',
-            text: JSON.stringify({ error: error.message, code: error.code, requestId: error.requestId }),
+            text: JSON.stringify({
+              error: error.message,
+              code: error.code,
+              requestId: error.requestId,
+              details: error.details,
+            }, null, 2),
           },
         ],
         isError: true,
@@ -31,7 +43,12 @@ export async function runToolHandler(handler: () => Promise<unknown>): Promise<{
         content: [
           {
             type: 'text',
-            text: JSON.stringify({ error: error.message, code: 'NETWORK', requestId: undefined }),
+            text: JSON.stringify({
+              error: error.message,
+              code: 'NETWORK',
+              cause: summarizeCause(error.cause),
+              stack: error.stack,
+            }, null, 2),
           },
         ],
         isError: true,
@@ -39,7 +56,16 @@ export async function runToolHandler(handler: () => Promise<unknown>): Promise<{
     }
     const message = error instanceof Error ? error.message : String(error);
     return {
-      content: [{ type: 'text', text: JSON.stringify({ error: message, code: 'UNKNOWN', requestId: undefined }) }],
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            error: message,
+            code: 'UNKNOWN',
+            stack: error instanceof Error ? error.stack : undefined,
+          }, null, 2),
+        },
+      ],
       isError: true,
     };
   }

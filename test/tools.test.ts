@@ -1,17 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createToolHandlers } from '../src/tools.js';
+import type { KimiClient } from '../src/kimi/client.js';
 
-function makeKimi(overrides: Record<string, unknown> = {}) {
+function makeKimi(overrides: Record<string, unknown> = {}): KimiClient {
   return {
-    createSession: vi.fn(async () => ({ id: 's1' })),
-    submitPrompt: vi.fn(async () => ({ prompt_id: 'p1', user_message_id: 'm1', status: 'running' })),
-    getStatus: vi.fn(async () => ({ status: 'idle' })),
-    listMessages: vi.fn(async () => []),
-    getGitStatus: vi.fn(async () => ({ entries: {}, additions: 0, deletions: 0 })),
-    getFileDiff: vi.fn(async (sessionId: string, path: string) => ({ path, diff: '' })),
-    abortSession: vi.fn(async () => undefined),
+    createSession: vi.fn(async () => ({ id: 's1' })) as unknown as KimiClient['createSession'],
+    submitPrompt: vi.fn(async () => ({ prompt_id: 'p1', user_message_id: 'm1', status: 'running' })) as unknown as KimiClient['submitPrompt'],
+    getStatus: vi.fn(async () => ({ status: 'idle' })) as unknown as KimiClient['getStatus'],
+    listMessages: vi.fn(async () => []) as unknown as KimiClient['listMessages'],
+    getGitStatus: vi.fn(async () => ({ entries: {}, additions: 0, deletions: 0 })) as unknown as KimiClient['getGitStatus'],
+    getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '' })) as unknown as KimiClient['getFileDiff'],
+    abortSession: vi.fn(async () => undefined) as unknown as KimiClient['abortSession'],
     ...overrides,
-  };
+  } as KimiClient;
 }
 
 function makeConfig(overrides: Partial<import('../src/config.js').BridgeConfig> = {}) {
@@ -28,7 +29,7 @@ function makeConfig(overrides: Partial<import('../src/config.js').BridgeConfig> 
 describe('tool handlers', () => {
   it('delegates a task by creating a session and submitting a prompt', async () => {
     const kimi = makeKimi();
-    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig() });
+    const handlers = createToolHandlers({ kimi, config: makeConfig() });
 
     await expect(handlers.kimi_delegate_task({
       cwd: '/repo',
@@ -70,7 +71,7 @@ describe('tool handlers', () => {
       getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 10, deletions: 2 })),
       getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: `@@ diff for ${path}` })),
     });
-    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig() });
+    const handlers = createToolHandlers({ kimi, config: makeConfig() });
 
     const handoff = await handlers.kimi_get_handoff({ sessionId: 's1' });
 
@@ -83,7 +84,7 @@ describe('tool handlers', () => {
 
   it('continues a task by submitting a follow-up prompt', async () => {
     const kimi = makeKimi();
-    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig() });
+    const handlers = createToolHandlers({ kimi, config: makeConfig() });
 
     const result = await handlers.kimi_continue_task({
       sessionId: 's1',
@@ -106,7 +107,7 @@ describe('tool handlers', () => {
     const kimi = makeKimi({
       getFileDiff: vi.fn(async () => ({ path: 'src/a.ts', diff: '@@ fake diff' })),
     });
-    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig() });
+    const handlers = createToolHandlers({ kimi, config: makeConfig() });
 
     await expect(handlers.kimi_get_diff({ sessionId: 's1', path: 'src/a.ts' })).resolves.toEqual({
       path: 'src/a.ts',
@@ -116,7 +117,7 @@ describe('tool handlers', () => {
 
   it('aborts a session', async () => {
     const kimi = makeKimi();
-    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig() });
+    const handlers = createToolHandlers({ kimi, config: makeConfig() });
 
     await expect(handlers.kimi_abort({ sessionId: 's1' })).resolves.toEqual({ sessionId: 's1', aborted: true });
     expect(kimi.abortSession).toHaveBeenCalledWith('s1');

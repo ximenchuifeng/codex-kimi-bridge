@@ -19,6 +19,7 @@ describe('runToolHandler', () => {
       error: 'bad request',
       code: 40001,
       requestId: 'req_123',
+      details: { field: 'name' },
     });
   });
 

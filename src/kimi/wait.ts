@@ -7,6 +7,7 @@ export interface WaitUntilIdleResult {
 export interface WaitUntilIdleInput {
   sessionId: string;
   timeoutMs: number;
+  pollIntervalMs?: number;
   pollStatus: () => Promise<{ status: KimiSessionRuntimeStatus }>;
 }
 
@@ -16,12 +17,22 @@ export function deriveWaitResult(input: { status: KimiSessionRuntimeStatus }): W
 }
 
 export async function waitUntilIdle(input: WaitUntilIdleInput): Promise<WaitUntilIdleResult> {
+  const intervalMs = input.pollIntervalMs ?? 500;
   const deadline = Date.now() + input.timeoutMs;
-  while (Date.now() < deadline) {
+
+  do {
+    const pollStart = Date.now();
     const status = await input.pollStatus();
     const result = deriveWaitResult(status);
     if (result !== null) return result;
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  }
+
+    const elapsed = Date.now() - pollStart;
+    const remaining = deadline - Date.now();
+    const sleepMs = Math.max(0, Math.min(intervalMs - elapsed, remaining));
+    if (sleepMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, sleepMs));
+    }
+  } while (Date.now() < deadline);
+
   return { status: 'timeout' };
 }
