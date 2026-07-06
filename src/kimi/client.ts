@@ -20,6 +20,22 @@ export interface SubmitPromptInput {
   swarmMode?: boolean;
 }
 
+export interface WireMessage {
+  id: string;
+  role: string;
+  content: Array<{ type: string; text?: string }>;
+}
+
+export interface GitStatusResult {
+  entries: Record<string, string>;
+  additions: number;
+  deletions: number;
+}
+
+function messageText(message: WireMessage): string {
+  return message.content.map((part) => part.text ?? '').join('');
+}
+
 export class KimiClient {
   constructor(private readonly http: KimiHttpClient | HttpPort) {}
 
@@ -43,5 +59,18 @@ export class KimiClient {
       plan_mode: input.planMode,
       ...(input.swarmMode === undefined ? {} : { swarm_mode: input.swarmMode }),
     });
+  }
+
+  async listMessages(sessionId: string): Promise<Array<{ role: string; content: string }>> {
+    const page = await this.http.get<{ items: WireMessage[] }>(`/sessions/${encodeURIComponent(sessionId)}/messages`);
+    return page.items.map((message) => ({ role: message.role, content: messageText(message) }));
+  }
+
+  getGitStatus(sessionId: string): Promise<GitStatusResult> {
+    return this.http.post(`/sessions/${encodeURIComponent(sessionId)}/fs:git_status`, {});
+  }
+
+  getFileDiff(sessionId: string, path: string): Promise<{ path: string; diff: string }> {
+    return this.http.post(`/sessions/${encodeURIComponent(sessionId)}/fs:diff`, { path });
   }
 }
