@@ -58,10 +58,14 @@ export interface ToolHandlers {
   kimi_abort: (input: AbortInput) => Promise<{ sessionId: string; aborted: true }>;
 }
 
-function resolveModel(inputModel: string | undefined, config: BridgeConfig): string {
-  const model = inputModel ?? config.defaultModel;
+async function resolveModel(
+  kimi: KimiClient,
+  inputModel: string | undefined,
+  config: BridgeConfig,
+): Promise<string> {
+  const model = inputModel ?? config.defaultModel ?? await kimi.resolveDefaultModel();
   if (!model) {
-    throw new Error('No model specified and no default model configured (set KIMI_MODEL or config.defaultModel)');
+    throw new Error('No model specified. Pass model in the MCP call, set KIMI_MODEL, or configure default_model in Kimi server.');
   }
   return model;
 }
@@ -80,7 +84,7 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
       });
       const result = await deps.kimi.submitPrompt(session.id, {
         content: prompt,
-        model: resolveModel(input.model, deps.config),
+        model: await resolveModel(deps.kimi, input.model, deps.config),
         thinking: input.thinking ?? deps.config.defaultThinking,
         permissionMode: deps.config.defaultPermissionMode,
         planMode: false,
@@ -121,7 +125,7 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
       });
       const result = await deps.kimi.submitPrompt(input.sessionId, {
         content: prompt,
-        model: resolveModel(input.model, deps.config),
+        model: await resolveModel(deps.kimi, input.model, deps.config),
         thinking: input.thinking ?? deps.config.defaultThinking,
         permissionMode: deps.config.defaultPermissionMode,
         planMode: false,

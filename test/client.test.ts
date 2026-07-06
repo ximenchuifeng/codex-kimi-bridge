@@ -45,4 +45,14 @@ describe('KimiClient', () => {
     await client.abortSession('s1');
     expect(http.post).toHaveBeenCalledWith('/sessions/s1/abort');
   });
+
+  it('reads the default model from server config', async () => {
+    const http: HttpPort = {
+      post: vi.fn(),
+      get: vi.fn(async () => ({ default_model: 'kimi-k2' })) as HttpPort['get'],
+    };
+    const client = new KimiClient(http);
+    await expect(client.resolveDefaultModel()).resolves.toBe('kimi-k2');
+    expect(http.get).toHaveBeenCalledWith('/config');
+  });
 });

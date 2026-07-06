@@ -124,7 +124,9 @@ describe('tool handlers', () => {
   });
 
   it('fails fast when no model is configured', async () => {
-    const kimi = makeKimi();
+    const kimi = makeKimi({
+      resolveDefaultModel: vi.fn(async () => undefined),
+    });
     const handlers = createToolHandlers({
       kimi: kimi as never,
       config: makeConfig({ defaultModel: undefined }),
@@ -136,5 +138,27 @@ describe('tool handlers', () => {
       acceptanceCriteria: ['passes tests'],
       plan: ['edit code'],
     })).rejects.toThrow(/model/);
+  });
+
+  it('falls back to Kimi server default_model when KIMI_MODEL is unset', async () => {
+    const kimi = makeKimi({
+      resolveDefaultModel: vi.fn(async () => 'kimi-k2'),
+    });
+    const handlers = createToolHandlers({
+      kimi: kimi as never,
+      config: makeConfig({ defaultModel: undefined }),
+    });
+
+    await handlers.kimi_delegate_task({
+      cwd: '/repo',
+      task: 'implement x',
+      acceptanceCriteria: ['passes tests'],
+      plan: ['edit code'],
+    });
+
+    expect(kimi.submitPrompt).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({ model: 'kimi-k2' }),
+    );
   });
 });

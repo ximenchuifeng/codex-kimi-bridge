@@ -34,3 +34,7 @@ export interface SessionStatus {
   max_context_tokens: number;
   context_usage: number;
 }
+
+export interface KimiServerConfig {
+  default_model?: string;
+}
