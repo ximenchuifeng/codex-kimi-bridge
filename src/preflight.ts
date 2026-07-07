@@ -1,5 +1,6 @@
 import { spawn as defaultSpawn, type ChildProcess } from 'node:child_process';
 import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { resolveServerToken, type BridgeConfig, type TokenSource } from './config.js';
 import { KimiApiError, KimiNetworkError } from './errors.js';
 import type { KimiHttpClient } from './kimi/http.js';
@@ -20,6 +21,7 @@ export interface BridgeStatus {
   cachedUntil?: number;
   diagnostics: string[];
   nextActions: string[];
+  commands?: string[];
 }
 
 export interface PreflightOptions {
@@ -32,6 +34,11 @@ export interface PreflightOptions {
 
 const DEFAULT_STARTUP_TIMEOUT_MS = 30000;
 const DEFAULT_POLL_INTERVAL_MS = 500;
+
+function shellQuote(arg: string): string {
+  if (/^[A-Za-z0-9_/.-]+$/.test(arg)) return arg;
+  return `'${arg.replace(/'/g, "'\\''")}'`;
+}
 
 function defaultResolveToken(config: BridgeConfig): { token?: string; source: TokenSource } {
   return resolveServerToken(config.envServerToken, config.kimiCodeHome, homedir());
@@ -150,6 +157,7 @@ export class KimiPreflight {
       cacheFresh: false,
       diagnostics,
       nextActions: this.buildNextActions(status),
+      commands: this.buildCommands(status),
     };
   }
 
@@ -176,6 +184,61 @@ export class KimiPreflight {
       '请检查 KIMI_SERVER_TOKEN 是否有效，以及 bridge 与 Kimi server 使用的 KIMI_CODE_HOME 是否一致。',
       '本地 smoke 测试可临时使用 --dangerous-bypass-auth 启动 Kimi server。',
     ];
+  }
+
+  private buildCommands(status: BridgeStatus['status']): string[] {
+    if (status === 'ready') {
+      return [];
+    }
+
+    const commands: string[] = [];
+
+    if (status === 'server_unreachable') {
+      if (this.config.autoStart) {
+        commands.push(`${shellQuote(this.config.kimiCommand)} server run --keep-alive`);
+      } else {
+        commands.push(`${shellQuote(this.config.kimiCommand)} server start`);
+      }
+    }
+
+    if (status === 'auth_failed') {
+      commands.push(...this.buildTokenCheckCommands());
+    }
+
+    // If the bridge code or plugin config was just changed, rebuilding and reinstalling
+    // the local plugin is a safe next step before trying again.
+    commands.push('pnpm build');
+    commands.push('codex plugin add kimi-delegate@codex-kimi-bridge-local');
+
+    return commands;
+  }
+
+  private buildTokenCheckCommands(): string[] {
+    const { serverTokenSource, kimiCodeHome } = this.config;
+
+    if (serverTokenSource === 'env') {
+      return [
+        'echo "KIMI_SERVER_TOKEN is configured via environment; verify it is valid and matches the server."',
+      ];
+    }
+
+    const check = (path: string) =>
+      `test -f ${shellQuote(path)} && echo "token file exists" || echo "token file missing"`;
+
+    if (serverTokenSource === 'kimi_code_home' && kimiCodeHome) {
+      return [check(join(kimiCodeHome, 'server.token'))];
+    }
+
+    if (serverTokenSource === 'home') {
+      return [check(join(homedir(), '.kimi-code', 'server.token'))];
+    }
+
+    // No token source known; suggest checking the default file and any custom home.
+    const commands = [check(join(homedir(), '.kimi-code', 'server.token'))];
+    if (kimiCodeHome) {
+      commands.push(check(join(kimiCodeHome, 'server.token')));
+    }
+    return commands;
   }
 
   private async checkAuth(): Promise<boolean> {

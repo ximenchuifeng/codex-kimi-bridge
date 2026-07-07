@@ -72,6 +72,11 @@ The `kimi_bridge_status` tool always performs a live check and does not use or u
   - `server_unreachable` with `autoStart=true`: the next task call will try to auto-start the server, or you can run `kimi server run --keep-alive` manually.
   - `server_unreachable` with `autoStart=false`: start the server manually or set `KIMI_AUTO_START=true`.
   - `auth_failed`: check `KIMI_SERVER_TOKEN` / `KIMI_CODE_HOME`, or for local smoke testing start Kimi with `--dangerous-bypass-auth`.
+- `commands` *(optional)*: an array of safe, copyable shell commands that you can run to act on the diagnosis. Any dynamic values taken from configuration (such as `kimiCommand` or `kimiCodeHome`) are shell-quoted so the commands remain valid even when those values contain spaces or quotes. Token values are never included. The array is empty or omitted in the `ready` state. For other states it may include commands such as:
+  - `server_unreachable` + `autoStart=false`: `kimi server start`
+  - `server_unreachable` + `autoStart=true`: `kimi server run --keep-alive`
+  - `auth_failed`: a safe check such as `test -f ~/.kimi-code/server.token && echo "token file exists" || echo "token file missing"`, or a hint when the token comes from `KIMI_SERVER_TOKEN`
+  - if the bridge/plugin was just changed: `pnpm build` and `codex plugin add kimi-delegate@codex-kimi-bridge-local`
 - `diagnostics`: technical messages from the latest live checks. Token values are never included.
 - `tokenSource`, `autoStart`, `kimiCommand`, `preflightCacheMs`, `cacheFresh`, `cacheAgeMs`, `cachedUntil`: configuration and cache metadata.
 

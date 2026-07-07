@@ -26,6 +26,11 @@ function makeConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
   };
 }
 
+function shellQuote(arg: string): string {
+  if (/^[A-Za-z0-9_/.-]+$/.test(arg)) return arg;
+  return `'${arg.replace(/'/g, "'\\''")}'`;
+}
+
 type HttpResult = 'ok' | 'error' | Error;
 
 function makeHttp(sequences: { healthz: HttpResult[]; config?: HttpResult[] }) {
@@ -277,6 +282,132 @@ describe('KimiPreflight', () => {
     expect(cached.cacheFresh).toBe(true);
     expect(cached.status).toBe('ready');
     expect(http.get).toHaveBeenCalledTimes(4);
+  });
+
+  describe('commands', () => {
+    it('returns empty commands when ready', async () => {
+      const http = makeHttp({ healthz: ['ok'], config: ['ok'] });
+      const preflight = new KimiPreflight(
+        makeConfig({ serverToken: 'secret-token', serverTokenSource: 'env' }),
+        http,
+        { pollIntervalMs: 10 },
+      );
+
+      const status = await preflight.getStatus();
+      expect(status.status).toBe('ready');
+      expect(status.commands).toEqual([]);
+      expect(JSON.stringify(status)).not.toContain('secret-token');
+    });
+
+    it('includes the start command when server is unreachable and autoStart is false', async () => {
+      const http = makeHttp({ healthz: ['error'] });
+      const spawn = vi.fn(() => makeFakeChildProcess());
+      const preflight = new KimiPreflight(
+        makeConfig({ autoStart: false, kimiCommand: 'kimi' }),
+        http,
+        { spawn },
+      );
+
+      const status = await preflight.getStatus();
+      expect(status.status).toBe('server_unreachable');
+      expect(status.commands).toContain('kimi server start');
+      expect(spawn).not.toHaveBeenCalled();
+    });
+
+    it('includes the keep-alive command using the configured kimiCommand when server is unreachable and autoStart is true', async () => {
+      const http = makeHttp({ healthz: ['error'] });
+      const spawn = vi.fn(() => makeFakeChildProcess());
+      const preflight = new KimiPreflight(
+        makeConfig({ autoStart: true, kimiCommand: 'mykimi' }),
+        http,
+        { spawn },
+      );
+
+      const status = await preflight.getStatus();
+      expect(status.status).toBe('server_unreachable');
+      expect(status.commands).toContain('mykimi server run --keep-alive');
+      expect(spawn).not.toHaveBeenCalled();
+    });
+
+    it('includes a safe token file check command when auth fails', async () => {
+      const http = makeHttp({ healthz: ['ok'], config: ['error'] });
+      const preflight = new KimiPreflight(
+        makeConfig({ serverToken: 'secret-token', serverTokenSource: 'home' }),
+        http,
+        { pollIntervalMs: 10 },
+      );
+
+      const status = await preflight.getStatus();
+      expect(status.status).toBe('auth_failed');
+      expect(status.commands?.some((c) => c.includes('server.token'))).toBe(true);
+      expect(JSON.stringify(status)).not.toContain('secret-token');
+    });
+
+    it('includes a safe env-token hint when auth fails and token source is env', async () => {
+      const http = makeHttp({ healthz: ['ok'], config: ['error'] });
+      const preflight = new KimiPreflight(
+        makeConfig({ serverToken: 'secret-token', serverTokenSource: 'env' }),
+        http,
+        { pollIntervalMs: 10 },
+      );
+
+      const status = await preflight.getStatus();
+      expect(status.status).toBe('auth_failed');
+      expect(status.commands?.length).toBeGreaterThan(0);
+      expect(status.commands?.some((c) => c.includes('KIMI_SERVER_TOKEN'))).toBe(true);
+      expect(JSON.stringify(status)).not.toContain('secret-token');
+    });
+
+    it('shell-quotes kimiCommand with spaces in server_unreachable commands', async () => {
+      const http = makeHttp({ healthz: ['error'] });
+      const spawn = vi.fn(() => makeFakeChildProcess());
+      const preflight = new KimiPreflight(
+        makeConfig({ autoStart: false, kimiCommand: 'my kimi' }),
+        http,
+        { spawn },
+      );
+
+      const status = await preflight.getStatus();
+      expect(status.status).toBe('server_unreachable');
+      expect(status.commands).toContain(`${shellQuote('my kimi')} server start`);
+      expect(spawn).not.toHaveBeenCalled();
+    });
+
+    it('shell-quotes kimiCommand with single quotes in server_unreachable commands', async () => {
+      const http = makeHttp({ healthz: ['error'] });
+      const spawn = vi.fn(() => makeFakeChildProcess());
+      const preflight = new KimiPreflight(
+        makeConfig({ autoStart: true, kimiCommand: "ki'mi" }),
+        http,
+        { spawn },
+      );
+
+      const status = await preflight.getStatus();
+      expect(status.status).toBe('server_unreachable');
+      expect(status.commands).toContain(`${shellQuote("ki'mi")} server run --keep-alive`);
+      expect(spawn).not.toHaveBeenCalled();
+    });
+
+    it('shell-quotes kimiCodeHome with spaces and quotes in auth_failed token check', async () => {
+      const http = makeHttp({ healthz: ['ok'], config: ['error'] });
+      const weirdHome = "/tmp/ki mi'\"dir";
+      const preflight = new KimiPreflight(
+        makeConfig({
+          serverToken: 'secret-token',
+          serverTokenSource: 'kimi_code_home',
+          kimiCodeHome: weirdHome,
+        }),
+        http,
+        { pollIntervalMs: 10 },
+      );
+
+      const status = await preflight.getStatus();
+      const expectedPath = join(weirdHome, 'server.token');
+      const expectedCheck = `test -f ${shellQuote(expectedPath)} && echo "token file exists" || echo "token file missing"`;
+      expect(status.status).toBe('auth_failed');
+      expect(status.commands).toContain(expectedCheck);
+      expect(JSON.stringify(status)).not.toContain('secret-token');
+    });
   });
 
   describe('success cache', () => {
