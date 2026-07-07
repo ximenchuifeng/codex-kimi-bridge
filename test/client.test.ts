@@ -63,4 +63,15 @@ describe('KimiClient', () => {
     expect(http.get).toHaveBeenCalledWith('/sessions/s1/approvals', { status: 'pending' });
     expect(http.get).toHaveBeenCalledWith('/sessions/s1/questions', { status: 'pending' });
   });
+
+  it('fetches a session by id', async () => {
+    const http: HttpPort = {
+      post: vi.fn(),
+      get: vi.fn(async () => ({ id: 's1', status: 'idle', metadata: { cwd: '/repo' }, title: 'Task', agent_config: {}, last_seq: 0 })) as HttpPort['get'],
+    };
+    const client = new KimiClient(http);
+
+    await expect(client.getSession('s1')).resolves.toMatchObject({ id: 's1', metadata: { cwd: '/repo' } });
+    expect(http.get).toHaveBeenCalledWith('/sessions/s1');
+  });
 });

@@ -28,6 +28,10 @@ export async function startFakeKimiServer(): Promise<FakeKimiServer> {
       }));
       return;
     }
+    if (req.method === 'GET' && req.url === '/api/v1/sessions/s1') {
+      res.end(envelope({ id: 's1', title: 'test', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 }));
+      return;
+    }
     if (req.method === 'POST' && req.url === '/api/v1/sessions/s1/fs:git_status') {
       res.end(envelope({ entries: { 'src/a.ts': 'M' }, additions: 10, deletions: 2 }));
       return;

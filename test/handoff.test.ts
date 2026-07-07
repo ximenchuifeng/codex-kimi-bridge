@@ -17,4 +17,16 @@ describe('buildHandoff', () => {
     expect(handoff.changedFiles).toEqual(['src/a.ts']);
     expect(handoff.diffs).toHaveLength(1);
   });
+
+  it('uses an explicit changedFiles override when provided', () => {
+    const handoff = buildHandoff({
+      messages: [],
+      gitStatus: { entries: { 'tmp/': '??' }, additions: 0, deletions: 0 },
+      diffs: [{ path: 'tmp/file.txt', diff: '@@ fake diff' }],
+      waitStatus: 'idle',
+      changedFiles: ['tmp/file.txt'],
+    });
+
+    expect(handoff.changedFiles).toEqual(['tmp/file.txt']);
+  });
 });

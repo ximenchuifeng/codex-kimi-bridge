@@ -7,6 +7,7 @@ import type { KimiPreflight } from '../src/preflight.js';
 function makeKimi(overrides: Record<string, unknown> = {}): KimiClient {
   return {
     createSession: vi.fn(async () => ({ id: 's1' })) as unknown as KimiClient['createSession'],
+    getSession: vi.fn(async () => ({ id: 's1', title: 'test', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 })) as unknown as KimiClient['getSession'],
     submitPrompt: vi.fn(async () => ({ prompt_id: 'p1', user_message_id: 'm1', status: 'running' })) as unknown as KimiClient['submitPrompt'],
     getStatus: vi.fn(async () => ({ status: 'idle' })) as unknown as KimiClient['getStatus'],
     listMessages: vi.fn(async () => []) as unknown as KimiClient['listMessages'],
@@ -141,6 +142,62 @@ describe('tool handlers', () => {
     expect(handoff.changedFiles).toEqual(['src/a.ts']);
     expect(handoff.diffs).toEqual([{ path: 'src/a.ts', diff: '@@ diff for src/a.ts' }]);
     expect(kimi.getFileDiff).toHaveBeenCalledWith('s1', 'src/a.ts');
+  });
+
+  it('expands untracked directories to concrete file paths', async () => {
+    const kimi = makeKimi({
+      getStatus: vi.fn(async () => ({ status: 'idle' })),
+      listMessages: vi.fn(async () => []),
+      getGitStatus: vi.fn(async () => ({
+        entries: {
+          'src/a.ts': 'M',
+          'tmp/': '??',
+          'untracked.txt': '??',
+        },
+        additions: 10,
+        deletions: 2,
+      })),
+      getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: `@@ diff for ${path}` })),
+      getSession: vi.fn(async () => ({ id: 's1', title: 'test', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 })),
+    });
+    const fileLister = {
+      listFiles: vi.fn(async (_baseDir: string, relativeDir: string) => {
+        if (relativeDir === 'tmp/') return ['tmp/kimi-bridge-smoke.txt'];
+        return [];
+      }),
+    };
+    const handlers = createToolHandlers({ kimi, config: makeConfig(), preflight: makePreflight(), fileLister });
+
+    const handoff = await handlers.kimi_get_handoff({ sessionId: 's1' });
+
+    expect(handoff.changedFiles).toEqual([
+      'src/a.ts',
+      'tmp/kimi-bridge-smoke.txt',
+      'untracked.txt',
+    ]);
+    expect(kimi.getFileDiff).toHaveBeenCalledWith('s1', 'src/a.ts');
+    expect(kimi.getFileDiff).toHaveBeenCalledWith('s1', 'tmp/kimi-bridge-smoke.txt');
+    expect(kimi.getFileDiff).toHaveBeenCalledWith('s1', 'untracked.txt');
+    expect(kimi.getFileDiff).not.toHaveBeenCalledWith('s1', 'tmp/');
+  });
+
+  it('keeps the directory path when expansion yields no files', async () => {
+    const kimi = makeKimi({
+      getStatus: vi.fn(async () => ({ status: 'idle' })),
+      listMessages: vi.fn(async () => []),
+      getGitStatus: vi.fn(async () => ({ entries: { 'tmp/': '??' }, additions: 0, deletions: 0 })),
+      getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '' })),
+      getSession: vi.fn(async () => ({ id: 's1', title: 'test', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 })),
+    });
+    const fileLister = {
+      listFiles: vi.fn(async () => []),
+    };
+    const handlers = createToolHandlers({ kimi, config: makeConfig(), preflight: makePreflight(), fileLister });
+
+    const handoff = await handlers.kimi_get_handoff({ sessionId: 's1' });
+
+    expect(handoff.changedFiles).toEqual(['tmp/']);
+    expect(kimi.getFileDiff).toHaveBeenCalledWith('s1', 'tmp/');
   });
 
   it('continues a task by submitting a follow-up prompt', async () => {

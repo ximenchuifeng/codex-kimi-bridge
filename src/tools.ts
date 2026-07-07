@@ -3,13 +3,20 @@ import { buildContinuationPrompt, buildDelegationPrompt } from './prompt.js';
 import type { KimiHandoff } from './handoff.js';
 import type { KimiClient } from './kimi/client.js';
 import { waitUntilIdle, type WaitUntilIdleResult } from './kimi/wait.js';
-import { buildHandoff } from './handoff.js';
+import { buildHandoff, expandGitStatusEntries } from './handoff.js';
 import type { BridgeStatus, KimiPreflight } from './preflight.js';
+import { readdir } from 'node:fs/promises';
+import path from 'node:path';
+
+export interface FileLister {
+  listFiles(baseDir: string, relativeDir: string): Promise<string[]>;
+}
 
 export interface ToolDeps {
   kimi: KimiClient;
   config: BridgeConfig;
   preflight: KimiPreflight;
+  fileLister?: FileLister;
 }
 
 export interface DelegateTaskInput {
@@ -87,6 +94,23 @@ function buildWebUrl(serverUrl: string, sessionId: string): string {
   return `${serverUrl}/sessions/${encodeURIComponent(sessionId)}`;
 }
 
+const defaultFileLister: FileLister = {
+  async listFiles(baseDir: string, relativeDir: string): Promise<string[]> {
+    const fullDir = path.join(baseDir, relativeDir);
+    const entries = await readdir(fullDir, { withFileTypes: true });
+    const files: string[] = [];
+    for (const entry of entries) {
+      const childRelativePath = path.posix.join(relativeDir, entry.name);
+      if (entry.isDirectory()) {
+        files.push(...await this.listFiles(baseDir, childRelativePath));
+      } else if (entry.isFile() || entry.isSymbolicLink()) {
+        files.push(childRelativePath);
+      }
+    }
+    return files;
+  },
+};
+
 export function createToolHandlers(deps: ToolDeps): ToolHandlers {
   const handlers: ToolHandlers = {
     async kimi_bridge_status() {
@@ -136,16 +160,23 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
     },
 
     async kimi_get_handoff(input: GetHandoffInput) {
-      const [status, messages, gitStatus] = await Promise.all([
+      const [status, messages, gitStatus, session] = await Promise.all([
         deps.kimi.getStatus(input.sessionId),
         deps.kimi.listMessages(input.sessionId),
         deps.kimi.getGitStatus(input.sessionId),
+        deps.kimi.getSession(input.sessionId),
       ]);
 
-      const changedFiles = Object.keys(gitStatus.entries);
+      const fileLister = deps.fileLister ?? defaultFileLister;
+      const changedFiles = await expandGitStatusEntries({
+        entries: gitStatus.entries,
+        baseDir: session.metadata.cwd,
+        listFiles: fileLister.listFiles.bind(fileLister),
+      });
+
       const diffs = await Promise.all(changedFiles.map((path) => deps.kimi.getFileDiff(input.sessionId, path)));
 
-      return buildHandoff({ messages, gitStatus, diffs, waitStatus: status.status });
+      return buildHandoff({ messages, gitStatus, diffs, waitStatus: status.status, changedFiles });
     },
 
     async kimi_continue_task(input: ContinueTaskInput) {

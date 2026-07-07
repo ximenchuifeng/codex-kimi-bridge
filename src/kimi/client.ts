@@ -50,6 +50,10 @@ export class KimiClient {
     return this.http.get(`/sessions/${encodeURIComponent(sessionId)}/status`);
   }
 
+  getSession(sessionId: string): Promise<WireSession> {
+    return this.http.get(`/sessions/${encodeURIComponent(sessionId)}`);
+  }
+
   submitPrompt(sessionId: string, input: SubmitPromptInput): Promise<PromptSubmitResult> {
     return this.http.post(`/sessions/${encodeURIComponent(sessionId)}/prompts`, {
       content: [{ type: 'text', text: input.content }],
