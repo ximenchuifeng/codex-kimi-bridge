@@ -23,12 +23,20 @@ function isErrorEnvelope(value: unknown): value is ErrorEnvelope {
   );
 }
 
+const FRIENDLY_AUTH_MESSAGE =
+  'Kimi server requires authentication. Set KIMI_SERVER_TOKEN or start Kimi with --dangerous-bypass-auth for local smoke testing.';
+
 export class KimiHttpClient {
   constructor(
     private readonly serverUrl: string,
     private readonly fetchImpl: FetchLike = fetch,
     private readonly requestTimeoutMs: number = 30000,
+    private serverToken?: string,
   ) {}
+
+  setServerToken(token?: string): void {
+    this.serverToken = token;
+  }
 
   async get<T>(path: string, query?: Record<string, string | number | boolean | undefined>): Promise<T> {
     return this.request<T>('GET', path, undefined, query);
@@ -52,11 +60,15 @@ export class KimiHttpClient {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs);
 
+    const headers: Record<string, string> = {};
+    if (this.serverToken) headers.authorization = `Bearer ${this.serverToken}`;
+    if (body !== undefined) headers['content-type'] = 'application/json';
+
     let response: Response;
     try {
       response = await this.fetchImpl(url.toString(), {
         method,
-        headers: body === undefined ? undefined : { 'content-type': 'application/json' },
+        headers: Object.keys(headers).length > 0 ? headers : undefined,
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: controller.signal,
       });
@@ -81,6 +93,11 @@ export class KimiHttpClient {
     }
 
     if (!response.ok) {
+      if (response.status === 401) {
+        const requestId = isErrorEnvelope(parsed) ? parsed.request_id : undefined;
+        const code = isErrorEnvelope(parsed) ? parsed.code : response.status;
+        throw new KimiApiError(code, FRIENDLY_AUTH_MESSAGE, requestId);
+      }
       if (isErrorEnvelope(parsed)) {
         throw new KimiApiError(parsed.code, parsed.msg, parsed.request_id, parsed.details);
       }

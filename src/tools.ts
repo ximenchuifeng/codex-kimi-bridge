@@ -4,10 +4,12 @@ import type { KimiHandoff } from './handoff.js';
 import type { KimiClient } from './kimi/client.js';
 import { waitUntilIdle, type WaitUntilIdleResult } from './kimi/wait.js';
 import { buildHandoff } from './handoff.js';
+import type { BridgeStatus, KimiPreflight } from './preflight.js';
 
 export interface ToolDeps {
   kimi: KimiClient;
   config: BridgeConfig;
+  preflight: KimiPreflight;
 }
 
 export interface DelegateTaskInput {
@@ -56,6 +58,17 @@ export interface ToolHandlers {
   kimi_continue_task: (input: ContinueTaskInput) => Promise<{ sessionId: string; promptId: string; status: string }>;
   kimi_get_diff: (input: GetDiffInput) => Promise<{ path: string; diff: string }>;
   kimi_abort: (input: AbortInput) => Promise<{ sessionId: string; aborted: true }>;
+  kimi_bridge_status: () => Promise<BridgeStatus>;
+}
+
+function withPreflight<T extends unknown[], R>(
+  preflight: KimiPreflight,
+  fn: (...args: T) => Promise<R>,
+): (...args: T) => Promise<R> {
+  return async (...args: T) => {
+    await preflight.ensureReady();
+    return fn(...args);
+  };
 }
 
 async function resolveModel(
@@ -71,7 +84,11 @@ async function resolveModel(
 }
 
 export function createToolHandlers(deps: ToolDeps): ToolHandlers {
-  return {
+  const handlers: ToolHandlers = {
+    async kimi_bridge_status() {
+      return deps.preflight.getStatus();
+    },
+
     async kimi_delegate_task(input: DelegateTaskInput) {
       const session = input.sessionId
         ? { id: input.sessionId }
@@ -154,5 +171,15 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
       await deps.kimi.abortSession(input.sessionId);
       return { sessionId: input.sessionId, aborted: true };
     },
+  };
+
+  return {
+    ...handlers,
+    kimi_delegate_task: withPreflight(deps.preflight, handlers.kimi_delegate_task),
+    kimi_wait_until_idle: withPreflight(deps.preflight, handlers.kimi_wait_until_idle),
+    kimi_get_handoff: withPreflight(deps.preflight, handlers.kimi_get_handoff),
+    kimi_continue_task: withPreflight(deps.preflight, handlers.kimi_continue_task),
+    kimi_get_diff: withPreflight(deps.preflight, handlers.kimi_get_diff),
+    kimi_abort: withPreflight(deps.preflight, handlers.kimi_abort),
   };
 }

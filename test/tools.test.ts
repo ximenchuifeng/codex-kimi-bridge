@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createToolHandlers } from '../src/tools.js';
 import type { KimiClient } from '../src/kimi/client.js';
+import type { BridgeConfig } from '../src/config.js';
+import type { KimiPreflight } from '../src/preflight.js';
 
 function makeKimi(overrides: Record<string, unknown> = {}): KimiClient {
   return {
@@ -18,21 +20,54 @@ function makeKimi(overrides: Record<string, unknown> = {}): KimiClient {
   } as KimiClient;
 }
 
-function makeConfig(overrides: Partial<import('../src/config.js').BridgeConfig> = {}) {
+function makeConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
   return {
     serverUrl: 'http://127.0.0.1:58627',
     defaultModel: 'kimi-k2',
     defaultThinking: 'high',
-    defaultPermissionMode: 'auto' as const,
+    defaultPermissionMode: 'auto',
     requestTimeoutMs: 30000,
+    serverToken: undefined,
+    serverTokenSource: 'none',
+    autoStart: true,
+    kimiCommand: 'kimi',
     ...overrides,
   };
 }
 
+function makePreflight(overrides: Partial<import('../src/preflight.js').BridgeStatus> = {}): KimiPreflight {
+  return {
+    ensureReady: vi.fn(async () => ({ healthzOk: true, authOk: true, ...overrides })),
+    getStatus: vi.fn(async () => ({
+      serverUrl: 'http://127.0.0.1:58627',
+      healthzOk: true,
+      authOk: true,
+      tokenSource: 'home',
+      autoStart: true,
+      kimiCommand: 'kimi',
+      diagnostics: [],
+      ...overrides,
+    })),
+  } as unknown as KimiPreflight;
+}
+
 describe('tool handlers', () => {
+  it('preflights before delegating a task', async () => {
+    const preflight = makePreflight();
+    const handlers = createToolHandlers({ kimi: makeKimi(), config: makeConfig(), preflight });
+    await handlers.kimi_delegate_task({
+      cwd: '/repo',
+      task: 'implement x',
+      acceptanceCriteria: ['passes tests'],
+      plan: ['edit code'],
+      swarmMode: false,
+    });
+    expect(preflight.ensureReady).toHaveBeenCalled();
+  });
+
   it('delegates a task by creating a session and submitting a prompt', async () => {
     const kimi = makeKimi();
-    const handlers = createToolHandlers({ kimi, config: makeConfig() });
+    const handlers = createToolHandlers({ kimi, config: makeConfig(), preflight: makePreflight() });
 
     await expect(handlers.kimi_delegate_task({
       cwd: '/repo',
@@ -49,7 +84,7 @@ describe('tool handlers', () => {
         .mockResolvedValueOnce({ status: 'running' })
         .mockResolvedValueOnce({ status: 'idle' }),
     });
-    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig({ requestTimeoutMs: 1100 }) });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig({ requestTimeoutMs: 1100 }), preflight: makePreflight() });
 
     await expect(handlers.kimi_wait_until_idle({ sessionId: 's1' })).resolves.toEqual({ status: 'idle' });
     expect(kimi.getStatus).toHaveBeenCalledWith('s1');
@@ -59,7 +94,7 @@ describe('tool handlers', () => {
     const kimi = makeKimi({
       getStatus: vi.fn(async () => ({ status: 'running' })),
     });
-    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig({ requestTimeoutMs: 50 }) });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig({ requestTimeoutMs: 50 }), preflight: makePreflight() });
 
     await expect(handlers.kimi_wait_until_idle({ sessionId: 's1' })).resolves.toEqual({ status: 'timeout' });
   });
@@ -74,7 +109,7 @@ describe('tool handlers', () => {
       getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 10, deletions: 2 })),
       getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: `@@ diff for ${path}` })),
     });
-    const handlers = createToolHandlers({ kimi, config: makeConfig() });
+    const handlers = createToolHandlers({ kimi, config: makeConfig(), preflight: makePreflight() });
 
     const handoff = await handlers.kimi_get_handoff({ sessionId: 's1' });
 
@@ -87,7 +122,7 @@ describe('tool handlers', () => {
 
   it('continues a task by submitting a follow-up prompt', async () => {
     const kimi = makeKimi();
-    const handlers = createToolHandlers({ kimi, config: makeConfig() });
+    const handlers = createToolHandlers({ kimi, config: makeConfig(), preflight: makePreflight() });
 
     const result = await handlers.kimi_continue_task({
       sessionId: 's1',
@@ -110,7 +145,7 @@ describe('tool handlers', () => {
     const kimi = makeKimi({
       getFileDiff: vi.fn(async () => ({ path: 'src/a.ts', diff: '@@ fake diff' })),
     });
-    const handlers = createToolHandlers({ kimi, config: makeConfig() });
+    const handlers = createToolHandlers({ kimi, config: makeConfig(), preflight: makePreflight() });
 
     await expect(handlers.kimi_get_diff({ sessionId: 's1', path: 'src/a.ts' })).resolves.toEqual({
       path: 'src/a.ts',
@@ -120,10 +155,36 @@ describe('tool handlers', () => {
 
   it('aborts a session', async () => {
     const kimi = makeKimi();
-    const handlers = createToolHandlers({ kimi, config: makeConfig() });
+    const handlers = createToolHandlers({ kimi, config: makeConfig(), preflight: makePreflight() });
 
     await expect(handlers.kimi_abort({ sessionId: 's1' })).resolves.toEqual({ sessionId: 's1', aborted: true });
     expect(kimi.abortSession).toHaveBeenCalledWith('s1');
+  });
+
+  it('returns bridge status without leaking the token', async () => {
+    const preflight = makePreflight({
+      serverUrl: 'http://127.0.0.1:58627',
+      healthzOk: true,
+      authOk: true,
+      tokenSource: 'home',
+      autoStart: true,
+      kimiCommand: 'kimi',
+      diagnostics: [],
+    });
+    const handlers = createToolHandlers({
+      kimi: makeKimi(),
+      config: makeConfig({ serverToken: 'super-secret-token' }),
+      preflight,
+    });
+
+    const status = await handlers.kimi_bridge_status();
+    expect(status.tokenSource).toBe('home');
+    expect(status.serverUrl).toBe('http://127.0.0.1:58627');
+    expect(status.autoStart).toBe(true);
+    expect(status.kimiCommand).toBe('kimi');
+    expect(JSON.stringify(status)).not.toContain('super-secret-token');
+    expect(preflight.getStatus).toHaveBeenCalled();
+    expect(preflight.ensureReady).not.toHaveBeenCalled();
   });
 
   it('fails fast when no model is configured', async () => {
@@ -133,6 +194,7 @@ describe('tool handlers', () => {
     const handlers = createToolHandlers({
       kimi: kimi as never,
       config: makeConfig({ defaultModel: undefined }),
+      preflight: makePreflight(),
     });
 
     await expect(handlers.kimi_delegate_task({
@@ -148,7 +210,7 @@ describe('tool handlers', () => {
       getStatus: vi.fn(async () => ({ status: 'awaiting_approval' })),
       listPendingApprovals: vi.fn(async () => [{ approval_id: 'a1', tool_name: 'Bash' }]),
     });
-    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig() });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
 
     await expect(handlers.kimi_wait_until_idle({ sessionId: 's1' })).resolves.toEqual({
       status: 'awaiting_approval',
@@ -161,7 +223,7 @@ describe('tool handlers', () => {
       getStatus: vi.fn(async () => ({ status: 'awaiting_question' })),
       listPendingQuestions: vi.fn(async () => [{ question_id: 'q1', questions: [] }]),
     });
-    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig() });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
 
     await expect(handlers.kimi_wait_until_idle({ sessionId: 's1' })).resolves.toEqual({
       status: 'awaiting_question',

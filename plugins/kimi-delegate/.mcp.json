@@ -8,7 +8,11 @@
       "env": {
         "KIMI_SERVER_URL": "http://127.0.0.1:58627",
         "KIMI_PERMISSION_MODE": "auto",
-        "KIMI_THINKING": "high"
+        "KIMI_THINKING": "high",
+        "KIMI_AUTO_START": "true",
+        "KIMI_COMMAND": "kimi",
+        "KIMI_CODE_HOME": "",
+        "KIMI_SERVER_TOKEN": ""
       }
     }
   }

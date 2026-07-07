@@ -6,6 +6,7 @@ import { KimiApiError, KimiNetworkError } from './errors.js';
 import { KimiHttpClient } from './kimi/http.js';
 import { KimiClient } from './kimi/client.js';
 import { createToolHandlers } from './tools.js';
+import { KimiPreflight } from './preflight.js';
 
 function summarizeCause(cause: unknown): unknown {
   if (cause instanceof Error) {
@@ -73,8 +74,10 @@ export async function runToolHandler(handler: () => Promise<unknown>): Promise<{
 
 export async function main(): Promise<void> {
   const config = loadBridgeConfig();
-  const kimi = new KimiClient(new KimiHttpClient(config.serverUrl, fetch, config.requestTimeoutMs));
-  const handlers = createToolHandlers({ kimi, config });
+  const http = new KimiHttpClient(config.serverUrl, fetch, config.requestTimeoutMs, config.serverToken);
+  const preflight = new KimiPreflight(config, http);
+  const kimi = new KimiClient(http);
+  const handlers = createToolHandlers({ kimi, config, preflight });
   const server = new McpServer({ name: 'codex-kimi-bridge', version: '0.1.0' });
 
   server.tool(
@@ -138,6 +141,12 @@ export async function main(): Promise<void> {
       sessionId: z.string(),
     },
     async (input) => runToolHandler(() => handlers.kimi_abort(input)),
+  );
+
+  server.tool(
+    'kimi_bridge_status',
+    {},
+    async () => runToolHandler(() => handlers.kimi_bridge_status()),
   );
 
   await server.connect(new StdioServerTransport());
