@@ -105,7 +105,7 @@ Use these from Codex when the plugin is loaded:
 - `kimi_recent_sessions`: list recent Kimi sessions; use this first when a previous delegate was interrupted or you suspect a duplicate/running/aborted session.
 - `kimi_find_recent_session`: find a recent Kimi session by title substring; preferred when recovering from an interruption, quota recovery, or suspected duplicate task.
 - `kimi_delegate_task`: start a Kimi task from a Codex spec/plan.
-- `kimi_delegate_and_wait`: preferred one-call flow; delegates, waits, and returns `reviewPackage` when idle.
+- `kimi_delegate_and_wait`: preferred one-call flow; delegates, waits, and returns `reviewPackage` when idle. Supports an optional `dedupe` object to avoid duplicate sessions.
 - `kimi_wait_until_idle`: wait for Kimi to finish or report approval/question blocking.
 - `kimi_get_handoff`: summarize Kimi output, changed files, and diffs.
 - `kimi_review_package`: re-fetch a structured review package for an existing session.
@@ -117,7 +117,20 @@ Delegate and review tools return `webUrl`, which can be opened in Kimi Web to wa
 
 ## Handling interrupted or duplicate sessions
 
-If a previous `kimi_delegate_and_wait` was interrupted (for example, by pressing Esc), or if you are unsure whether a task is already running, call `kimi_find_recent_session` (when you remember part of the title) or `kimi_recent_sessions` first. Check the returned `status`, `title`, and `webUrl` to decide whether to continue an existing session (`kimi_continue_task`), wait for it (`kimi_wait_until_idle`), or abort it (`kimi_abort`). Do not blindly start a new `kimi_delegate_task` before confirming there is no orphaned or duplicate session.
+If a previous `kimi_delegate_and_wait` was interrupted (for example, by pressing Esc), or if you are unsure whether a task is already running, the recommended approach is to pass `dedupe` to `kimi_delegate_and_wait`:
+
+```json
+{
+  "titleContains": "<a stable substring from the original task title>",
+  "reuseIfStatus": ["running", "idle", "awaiting_approval", "awaiting_question"]
+}
+```
+
+When `dedupe` finds a reusable session, the bridge returns the existing session information instead of creating a duplicate. Use the returned `status`, `webUrl`, and `suggestedNextActions` to decide whether to wait, review, or resolve a block.
+
+`dedupe` only reuses sessions in `running`, `idle`, `awaiting_approval`, or `awaiting_question` status. It never automatically reuses an `aborted` session. If the matched session is `aborted`, inspect the `webUrl` and use `kimi_continue_task` to resume it manually; do not expect `kimi_delegate_and_wait` to resume it automatically.
+
+If you need more control, or if the task title is hard to make unique, call `kimi_find_recent_session` (when you remember part of the title) or `kimi_recent_sessions` first. Check the returned `status`, `title`, and `webUrl` to decide whether to continue an existing session (`kimi_continue_task`), wait for it (`kimi_wait_until_idle`), or abort it (`kimi_abort`). Do not blindly start a new `kimi_delegate_task` before confirming there is no orphaned or duplicate session.
 
 ## Verification Commands
 

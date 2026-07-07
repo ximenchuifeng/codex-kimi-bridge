@@ -1076,4 +1076,375 @@ describe('tool handlers', () => {
     expect(JSON.stringify(result)).not.toContain('config-secret');
     expect(result.query.titleContains).toBe('http://127.0.0.1:58627/#token=[redacted] [redacted]');
   });
+
+  describe('dedupe guard in delegate_and_wait', () => {
+    it('keeps existing behavior when dedupe is not provided', async () => {
+      const createSession = vi.fn(async () => ({ id: 's1' }));
+      const submitPrompt = vi.fn(async () => ({ prompt_id: 'p1', user_message_id: 'm1', status: 'running' }));
+      const kimi = makeKimi({
+        createSession,
+        submitPrompt,
+        getStatus: vi.fn(async () => ({ status: 'idle' })),
+        listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done' }]),
+        getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 })),
+        getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ diff' })),
+        getSession: vi.fn(async () => ({ id: 's1', title: 'test', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 })),
+      });
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+      const result = await handlers.kimi_delegate_and_wait({
+        cwd: '/repo',
+        task: 'implement x',
+        acceptanceCriteria: ['tests pass'],
+        plan: ['edit code'],
+      });
+
+      expect(createSession).toHaveBeenCalled();
+      expect(submitPrompt).toHaveBeenCalled();
+      expect(result.dedupe).toBeUndefined();
+      expect(result.reviewPackage).toBeDefined();
+    });
+
+    it('throws a clear error when dedupe.titleContains is empty', async () => {
+      const handlers = createToolHandlers({ kimi: makeKimi(), config: makeConfig(), preflight: makePreflight() });
+
+      await expect(
+        handlers.kimi_delegate_and_wait({
+          cwd: '/repo',
+          task: 'implement x',
+          acceptanceCriteria: ['tests pass'],
+          plan: ['edit code'],
+          dedupe: { titleContains: '' },
+        }),
+      ).rejects.toThrow(/titleContains/);
+
+      await expect(
+        handlers.kimi_delegate_and_wait({
+          cwd: '/repo',
+          task: 'implement x',
+          acceptanceCriteria: ['tests pass'],
+          plan: ['edit code'],
+          dedupe: { titleContains: '   ' },
+        }),
+      ).rejects.toThrow(/titleContains/);
+    });
+
+    it('proceeds to delegate when dedupe finds no match and reports the check', async () => {
+      const createSession = vi.fn(async () => ({ id: 's1' }));
+      const submitPrompt = vi.fn(async () => ({ prompt_id: 'p1', user_message_id: 'm1', status: 'running' }));
+      const listSessions = vi.fn(async () => ({ items: [] }));
+      const kimi = makeKimi({
+        createSession,
+        submitPrompt,
+        listSessions,
+        getStatus: vi.fn(async () => ({ status: 'idle' })),
+        listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done' }]),
+        getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 })),
+        getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ diff' })),
+        getSession: vi.fn(async () => ({ id: 's1', title: 'test', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 })),
+      });
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+      const result = await handlers.kimi_delegate_and_wait({
+        cwd: '/repo',
+        task: 'implement x',
+        acceptanceCriteria: ['tests pass'],
+        plan: ['edit code'],
+        dedupe: { titleContains: 'feature' },
+      });
+
+      expect(listSessions).toHaveBeenCalledWith({ pageSize: 20 });
+      expect(createSession).toHaveBeenCalled();
+      expect(submitPrompt).toHaveBeenCalled();
+      expect(result.dedupe).toMatchObject({ checked: true, matched: false, reused: false });
+      expect(result.dedupe?.suggestedNextActions.length).toBeGreaterThan(0);
+      expect(result.reviewPackage).toBeDefined();
+    });
+
+    it('does not create a new session when dedupe finds a running session', async () => {
+      const createSession = vi.fn(async () => ({ id: 's1' }));
+      const submitPrompt = vi.fn(async () => ({ prompt_id: 'p1', user_message_id: 'm1', status: 'running' }));
+      const listSessions = vi.fn(async () => ({
+        items: [{ id: 's2', title: 'Feature X', status: 'running', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 }],
+      }));
+      const getStatus = vi.fn(async () => ({ status: 'idle' }));
+      const getGitStatus = vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 }));
+      const kimi = makeKimi({
+        createSession,
+        submitPrompt,
+        listSessions,
+        getStatus,
+        getGitStatus,
+        getSession: vi.fn(async () => ({ id: 's2', title: 'Feature X', status: 'running', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 })),
+      });
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+      const result = await handlers.kimi_delegate_and_wait({
+        cwd: '/repo',
+        task: 'implement x',
+        acceptanceCriteria: ['tests pass'],
+        plan: ['edit code'],
+        dedupe: { titleContains: 'feature' },
+      });
+
+      expect(createSession).not.toHaveBeenCalled();
+      expect(submitPrompt).not.toHaveBeenCalled();
+      expect(getStatus).not.toHaveBeenCalled();
+      expect(getGitStatus).not.toHaveBeenCalled();
+      expect(result.sessionId).toBe('s2');
+      expect(result.webUrl).toBe('http://127.0.0.1:58627/sessions/s2');
+      expect(result.wait).toEqual({ status: 'running' });
+      expect(result.dedupe).toMatchObject({ checked: true, matched: true, reused: true, reason: 'running', match: { sessionId: 's2', status: 'running' } });
+      expect(result.dedupe?.suggestedNextActions.some((a) => a.includes('kimi_wait_until_idle'))).toBe(true);
+      expect(result.dedupe?.suggestedNextActions.some((a) => a.includes(result.webUrl))).toBe(true);
+      expect(result.handoff).toBeUndefined();
+      expect(result.reviewPackage).toBeUndefined();
+    });
+
+    it('returns the existing reviewPackage when dedupe finds an idle session', async () => {
+      const createSession = vi.fn(async () => ({ id: 's1' }));
+      const submitPrompt = vi.fn(async () => ({ prompt_id: 'p1', user_message_id: 'm1', status: 'running' }));
+      const listSessions = vi.fn(async () => ({
+        items: [{ id: 's2', title: 'Feature X', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 }],
+      }));
+      const getStatus = vi.fn(async () => ({ status: 'idle' }));
+      const kimi = makeKimi({
+        createSession,
+        submitPrompt,
+        listSessions,
+        getStatus,
+        listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done' }]),
+        getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 4, deletions: 1 })),
+        getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ diff' })),
+        getSession: vi.fn(async () => ({ id: 's2', title: 'Feature X', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 })),
+      });
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+      const result = await handlers.kimi_delegate_and_wait({
+        cwd: '/repo',
+        task: 'implement x',
+        acceptanceCriteria: ['tests pass'],
+        plan: ['edit code'],
+        dedupe: { titleContains: 'feature' },
+      });
+
+      expect(createSession).not.toHaveBeenCalled();
+      expect(submitPrompt).not.toHaveBeenCalled();
+      expect(result.sessionId).toBe('s2');
+      expect(result.wait).toEqual({ status: 'idle' });
+      expect(result.dedupe).toMatchObject({ checked: true, matched: true, reused: true, reason: 'idle' });
+      expect(result.handoff).toBeDefined();
+      expect(result.reviewPackage).toBeDefined();
+      expect(result.reviewPackage?.sessionId).toBe('s2');
+      expect(result.reviewPackage?.handoff).toBe(result.handoff);
+      expect(result.changedFiles).toEqual(['src/a.ts']);
+    });
+
+    it('returns pending approvals without creating a new session when dedupe finds an awaiting_approval session', async () => {
+      const createSession = vi.fn(async () => ({ id: 's1' }));
+      const submitPrompt = vi.fn(async () => ({ prompt_id: 'p1', user_message_id: 'm1', status: 'running' }));
+      const listSessions = vi.fn(async () => ({
+        items: [{ id: 's2', title: 'Feature X', status: 'awaiting_approval', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 }],
+      }));
+      const listPendingApprovals = vi.fn(async () => [{ approval_id: 'a1', tool_name: 'Bash' }]);
+      const kimi = makeKimi({
+        createSession,
+        submitPrompt,
+        listSessions,
+        getStatus: vi.fn(async () => ({ status: 'awaiting_approval' })),
+        listPendingApprovals,
+        getSession: vi.fn(async () => ({ id: 's2', title: 'Feature X', status: 'awaiting_approval', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 })),
+      });
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+      const result = await handlers.kimi_delegate_and_wait({
+        cwd: '/repo',
+        task: 'implement x',
+        acceptanceCriteria: ['tests pass'],
+        plan: ['edit code'],
+        dedupe: { titleContains: 'feature' },
+      });
+
+      expect(createSession).not.toHaveBeenCalled();
+      expect(submitPrompt).not.toHaveBeenCalled();
+      expect(result.sessionId).toBe('s2');
+      expect(result.wait).toEqual({ status: 'awaiting_approval', approvals: [{ approval_id: 'a1', tool_name: 'Bash' }] });
+      expect(result.dedupe).toMatchObject({ checked: true, matched: true, reused: true, reason: 'awaiting_approval', match: { sessionId: 's2', status: 'awaiting_approval' } });
+      expect(result.dedupe?.suggestedNextActions.some((a) => a.includes('approval') || a.includes('审批'))).toBe(true);
+      expect(result.handoff).toBeUndefined();
+      expect(result.reviewPackage).toBeUndefined();
+    });
+
+    it('returns pending questions without creating a new session when dedupe finds an awaiting_question session', async () => {
+      const createSession = vi.fn(async () => ({ id: 's1' }));
+      const submitPrompt = vi.fn(async () => ({ prompt_id: 'p1', user_message_id: 'm1', status: 'running' }));
+      const listSessions = vi.fn(async () => ({
+        items: [{ id: 's2', title: 'Feature X', status: 'awaiting_question', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 }],
+      }));
+      const listPendingQuestions = vi.fn(async () => [{ question_id: 'q1', questions: [] }]);
+      const kimi = makeKimi({
+        createSession,
+        submitPrompt,
+        listSessions,
+        getStatus: vi.fn(async () => ({ status: 'awaiting_question' })),
+        listPendingQuestions,
+        getSession: vi.fn(async () => ({ id: 's2', title: 'Feature X', status: 'awaiting_question', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 })),
+      });
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+      const result = await handlers.kimi_delegate_and_wait({
+        cwd: '/repo',
+        task: 'implement x',
+        acceptanceCriteria: ['tests pass'],
+        plan: ['edit code'],
+        dedupe: { titleContains: 'feature' },
+      });
+
+      expect(createSession).not.toHaveBeenCalled();
+      expect(submitPrompt).not.toHaveBeenCalled();
+      expect(result.sessionId).toBe('s2');
+      expect(result.wait).toEqual({ status: 'awaiting_question', questions: [{ question_id: 'q1', questions: [] }] });
+      expect(result.dedupe).toMatchObject({ checked: true, matched: true, reused: true, reason: 'awaiting_question', match: { sessionId: 's2', status: 'awaiting_question' } });
+      expect(result.dedupe?.suggestedNextActions.some((a) => a.includes('question') || a.includes('问题'))).toBe(true);
+      expect(result.handoff).toBeUndefined();
+      expect(result.reviewPackage).toBeUndefined();
+    });
+
+    it('proceeds to delegate when the matched session status is not supported for reuse', async () => {
+      const createSession = vi.fn(async () => ({ id: 's1' }));
+      const submitPrompt = vi.fn(async () => ({ prompt_id: 'p1', user_message_id: 'm1', status: 'running' }));
+      const listSessions = vi.fn(async () => ({
+        items: [{ id: 's2', title: 'Feature X', status: 'aborted', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 }],
+      }));
+      const kimi = makeKimi({
+        createSession,
+        submitPrompt,
+        listSessions,
+        getStatus: vi.fn(async () => ({ status: 'idle' })),
+        listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done' }]),
+        getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 })),
+        getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ diff' })),
+        getSession: vi.fn(async () => ({ id: 's1', title: 'test', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 })),
+      });
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+      const result = await handlers.kimi_delegate_and_wait({
+        cwd: '/repo',
+        task: 'implement x',
+        acceptanceCriteria: ['tests pass'],
+        plan: ['edit code'],
+        dedupe: { titleContains: 'feature' },
+      });
+
+      expect(createSession).toHaveBeenCalled();
+      expect(submitPrompt).toHaveBeenCalled();
+      expect(result.sessionId).toBe('s1');
+      expect(result.dedupe?.matched).toBe(true);
+      expect(result.dedupe?.reused).toBe(false);
+      expect(result.dedupe?.reason).toBe('status_not_supported');
+      expect(result.reviewPackage).toBeDefined();
+    });
+
+    it('respects custom reuseIfStatus in dedupe', async () => {
+      const createSession = vi.fn(async () => ({ id: 's1' }));
+      const submitPrompt = vi.fn(async () => ({ prompt_id: 'p1', user_message_id: 'm1', status: 'running' }));
+      const listSessions = vi.fn(async () => ({
+        items: [{ id: 's2', title: 'Feature X', status: 'running', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 }],
+      }));
+      const kimi = makeKimi({
+        createSession,
+        submitPrompt,
+        listSessions,
+        getStatus: vi.fn(async () => ({ status: 'idle' })),
+        listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done' }]),
+        getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 })),
+        getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ diff' })),
+        getSession: vi.fn(async () => ({ id: 's1', title: 'test', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 })),
+      });
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+      const result = await handlers.kimi_delegate_and_wait({
+        cwd: '/repo',
+        task: 'implement x',
+        acceptanceCriteria: ['tests pass'],
+        plan: ['edit code'],
+        dedupe: { titleContains: 'feature', reuseIfStatus: ['idle'] },
+      });
+
+      expect(createSession).toHaveBeenCalled();
+      expect(submitPrompt).toHaveBeenCalled();
+      expect(result.dedupe?.matched).toBe(true);
+      expect(result.dedupe?.reused).toBe(false);
+      expect(result.dedupe?.reason).toBe('status_not_reusable');
+    });
+
+    it('does not reuse aborted even when reuseIfStatus explicitly includes aborted', async () => {
+      const createSession = vi.fn(async () => ({ id: 's1' }));
+      const submitPrompt = vi.fn(async () => ({ prompt_id: 'p1', user_message_id: 'm1', status: 'running' }));
+      const listSessions = vi.fn(async () => ({
+        items: [{ id: 's2', title: 'Feature X', status: 'aborted', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 }],
+      }));
+      const kimi = makeKimi({
+        createSession,
+        submitPrompt,
+        listSessions,
+        getStatus: vi.fn(async () => ({ status: 'idle' })),
+        listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done' }]),
+        getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 })),
+        getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ diff' })),
+        getSession: vi.fn(async () => ({ id: 's1', title: 'test', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 })),
+      });
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+      const result = await handlers.kimi_delegate_and_wait({
+        cwd: '/repo',
+        task: 'implement x',
+        acceptanceCriteria: ['tests pass'],
+        plan: ['edit code'],
+        dedupe: { titleContains: 'feature', reuseIfStatus: ['aborted'] },
+      });
+
+      expect(createSession).toHaveBeenCalled();
+      expect(submitPrompt).toHaveBeenCalled();
+      expect(result.sessionId).toBe('s1');
+      expect(result.dedupe?.matched).toBe(true);
+      expect(result.dedupe?.reused).toBe(false);
+      expect(result.dedupe?.reason).toBe('status_not_supported');
+      expect(result.reviewPackage).toBeDefined();
+    });
+
+    it('redacts token-like values in dedupe query and matched session', async () => {
+      const createSession = vi.fn(async () => ({ id: 's1' }));
+      const submitPrompt = vi.fn(async () => ({ prompt_id: 'p1', user_message_id: 'm1', status: 'running' }));
+      const listSessions = vi.fn(async () => ({
+        items: [{ id: 's2', title: 'open http://127.0.0.1:58627/#token=query-secret config-secret', status: 'running', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 }],
+      }));
+      const kimi = makeKimi({
+        createSession,
+        submitPrompt,
+        listSessions,
+        getStatus: vi.fn(async () => ({ status: 'idle' })),
+      });
+      const handlers = createToolHandlers({
+        kimi: kimi as never,
+        config: makeConfig({ serverToken: 'config-secret' }),
+        preflight: makePreflight(),
+      });
+
+      const result = await handlers.kimi_delegate_and_wait({
+        cwd: '/repo',
+        task: 'implement x',
+        acceptanceCriteria: ['tests pass'],
+        plan: ['edit code'],
+        dedupe: { titleContains: 'http://127.0.0.1:58627/#token=query-secret config-secret' },
+      });
+
+      expect(createSession).not.toHaveBeenCalled();
+      expect(submitPrompt).not.toHaveBeenCalled();
+      expect(JSON.stringify(result)).not.toContain('query-secret');
+      expect(JSON.stringify(result)).not.toContain('config-secret');
+      expect(result.dedupe?.match?.title).toContain('#token=[redacted]');
+      expect(result.dedupe?.query?.titleContains).toBe('http://127.0.0.1:58627/#token=[redacted] [redacted]');
+    });
+  });
 });

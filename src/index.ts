@@ -107,6 +107,14 @@ export async function main(): Promise<void> {
       sessionId: z.string().optional(),
       model: z.string().optional(),
       thinking: z.string().optional(),
+      dedupe: z.object({
+        titleContains: z.string(),
+        status: z.string().optional(),
+        pageSize: z.number().optional(),
+        includeArchive: z.boolean().optional(),
+        excludeEmpty: z.boolean().optional(),
+        reuseIfStatus: z.array(z.string()).optional(),
+      }).optional(),
     },
     async (input) => runToolHandler(() => handlers.kimi_delegate_and_wait(input)),
   );

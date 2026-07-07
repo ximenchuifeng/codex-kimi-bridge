@@ -228,6 +228,31 @@ If the server cannot fetch messages for diagnostics, `recentMessages` is empty, 
 
 If the result is `timeout`, keep the `sessionId` and call `kimi_wait_until_idle` or `kimi_get_handoff` later. If it is blocked, resolve the approval/question in Kimi and continue the same session. Non-`idle` results do not include `handoff` or `reviewPackage`.
 
+#### Dedupe guard
+
+`kimi_delegate_and_wait` accepts an optional `dedupe` object that prevents accidentally creating a duplicate Kimi session after an interruption (for example, pressing Esc), quota recovery, or a mis-click. When `dedupe` is provided, the bridge first searches recent sessions by title substring using the same semantics as `kimi_find_recent_session`. If a reusable session is found, it returns the existing session instead of creating a new one.
+
+Input fields under `dedupe`:
+
+- `titleContains` *(required)*: substring to search for in session titles. Case-insensitive. Leading/trailing whitespace is trimmed; an empty or whitespace-only value returns a clear error.
+- `status`: filter by session status such as `idle`, `running`, `awaiting_approval`, `awaiting_question`, or `aborted`.
+- `pageSize`: number of recent sessions to inspect. Default: `20`.
+- `includeArchive`: include archived sessions.
+- `excludeEmpty`: exclude sessions with no messages.
+- `reuseIfStatus`: array of statuses that the caller considers reusable. Default: `["running", "idle", "awaiting_approval", "awaiting_question"]`.
+
+Only the following statuses can actually be reused automatically: `running`, `idle`, `awaiting_approval`, and `awaiting_question`. The bridge will never automatically reuse an `aborted` session, even if you include `aborted` in `reuseIfStatus`. If you find an aborted session, inspect the `webUrl` and use `kimi_continue_task` instead of relying on `kimi_delegate_and_wait` to resume it.
+
+Result behavior:
+
+- If `dedupe` is omitted, the tool behaves exactly as before and creates a new session.
+- If no matching session is found, the tool delegates normally and includes `dedupe.checked=true`, `dedupe.matched=false`, `dedupe.reused=false` in the result.
+- If a matching session is `running`, `idle`, `awaiting_approval`, or `awaiting_question`, and that status is in `reuseIfStatus`, the result contains the existing `sessionId`, `webUrl`, and appropriate wait state. No new session is created and no prompt is submitted. `dedupe.reused` is `true`.
+- If a matching session is supported for reuse but its status is not in `reuseIfStatus`, the tool delegates normally and reports `dedupe.matched=true`, `dedupe.reused=false`, `dedupe.reason="status_not_reusable"`.
+- If a matching session is not supported for reuse at all (for example, `aborted`), the tool delegates normally and reports `dedupe.matched=true`, `dedupe.reused=false`, `dedupe.reason="status_not_supported"`. For `aborted` matches, open the `webUrl` to inspect the cause and use `kimi_continue_task` if needed.
+
+No token or authorization information is returned by the dedupe search.
+
 ### Review package for Codex review
 
 `kimi_review_package` prepares a structured review package for Codex. It takes a `sessionId` and returns:

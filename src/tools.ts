@@ -33,6 +33,16 @@ export interface DelegateTaskInput {
 
 export interface DelegateAndWaitInput extends DelegateTaskInput {
   timeoutMs?: number;
+  dedupe?: DelegateAndWaitDedupeInput;
+}
+
+export interface DelegateAndWaitDedupeInput {
+  titleContains: string;
+  status?: string;
+  pageSize?: number;
+  includeArchive?: boolean;
+  excludeEmpty?: boolean;
+  reuseIfStatus?: string[];
 }
 
 export interface WaitUntilIdleInput {
@@ -103,6 +113,17 @@ export interface DelegateAndWaitResult {
   changedFiles?: string[];
   reviewPackage?: ReviewPackageResult;
   diagnostics?: DelegateAndWaitDiagnostics;
+  dedupe?: DelegateAndWaitDedupeResult;
+}
+
+export interface DelegateAndWaitDedupeResult {
+  checked: true;
+  matched: boolean;
+  reused: boolean;
+  reason?: string;
+  match?: RecentSession;
+  query?: FindRecentSessionResult['query'];
+  suggestedNextActions: string[];
 }
 
 export interface DelegateAndWaitDiagnostics {
@@ -173,11 +194,11 @@ function sanitizeSessionTitle(title: string): string {
     .replace(/([?&]token=)[^&\s]+/gi, '$1[redacted]');
 }
 
-function buildRecentSession(serverUrl: string, session: WireSession & { created_at?: string; updated_at?: string }): RecentSession {
+function buildRecentSession(serverUrl: string, session: WireSession & { created_at?: string; updated_at?: string }, serverToken: string | undefined): RecentSession {
   return {
     sessionId: session.id,
     status: session.status,
-    title: sanitizeSessionTitle(session.title),
+    title: sanitizeDiagnosticText(session.title, serverToken),
     webUrl: buildWebUrl(serverUrl, session.id),
     ...(session.created_at ? { createdAt: session.created_at } : {}),
     ...(session.updated_at ? { updatedAt: session.updated_at } : {}),
@@ -235,6 +256,59 @@ function redactToken(value: string, token: string | undefined): string {
 
 function sanitizeDiagnosticText(value: string, token: string | undefined): string {
   return redactToken(sanitizeSessionTitle(value), token);
+}
+
+interface FindRecentSessionByTitleResult {
+  query: FindRecentSessionResult['query'];
+  candidates: RecentSession[];
+  match?: RecentSession;
+  suggestedNextActions: string[];
+}
+
+async function findRecentSessionByTitle(
+  deps: ToolDeps,
+  input: FindRecentSessionInput,
+): Promise<FindRecentSessionByTitleResult> {
+  const titleContains = input.titleContains.trim();
+  if (titleContains.length === 0) {
+    throw new Error('titleContains 不能为空或仅包含空白字符。');
+  }
+  const safeTitleContains = sanitizeDiagnosticText(titleContains, deps.config.serverToken);
+
+  const result = await deps.kimi.listSessions({
+    pageSize: input.pageSize ?? 20,
+    status: input.status,
+    includeArchive: input.includeArchive,
+    excludeEmpty: input.excludeEmpty,
+  });
+
+  const normalizedQuery = titleContains.toLowerCase();
+  const candidates = result.items
+    .filter((session) => session.title.toLowerCase().includes(normalizedQuery))
+    .map((session) => buildRecentSession(deps.config.serverUrl, session, deps.config.serverToken));
+
+  const match = candidates[0];
+
+  const suggestedNextActions = match
+    ? buildFindSuggestions(match)
+    : [
+        `未找到标题包含 "${safeTitleContains}" 的 session。`,
+        '尝试放宽关键词（例如去掉日期、版本号），或调用 kimi_recent_sessions 查看最近 session 列表。',
+        '确认无重复/遗留 session 后再新建任务，避免直接重新 delegate 造成重复。',
+      ];
+
+  return {
+    query: {
+      titleContains: safeTitleContains,
+      ...(input.status !== undefined ? { status: input.status } : {}),
+      ...(input.pageSize !== undefined ? { pageSize: input.pageSize } : {}),
+      ...(input.includeArchive !== undefined ? { includeArchive: input.includeArchive } : {}),
+      ...(input.excludeEmpty !== undefined ? { excludeEmpty: input.excludeEmpty } : {}),
+    },
+    candidates,
+    ...(match ? { match } : {}),
+    suggestedNextActions,
+  };
 }
 
 async function buildDelegateAndWaitDiagnostics(
@@ -328,6 +402,43 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
     };
   }
 
+  async function buildDelegateAndWaitResult(
+    delegated: { sessionId: string; promptId: string; status: string; webUrl: string },
+    wait: WaitUntilIdleResult,
+  ): Promise<DelegateAndWaitResult> {
+    if (wait.status !== 'idle') {
+      const result: DelegateAndWaitResult = {
+        sessionId: delegated.sessionId,
+        promptId: delegated.promptId,
+        submitStatus: delegated.status,
+        webUrl: delegated.webUrl,
+        wait,
+      };
+      if (wait.status === 'timeout' || wait.status === 'aborted') {
+        result.diagnostics = await buildDelegateAndWaitDiagnostics(
+          deps.kimi,
+          delegated.sessionId,
+          wait.status,
+          delegated.webUrl,
+          deps.config.serverToken,
+        );
+      }
+      return result;
+    }
+    const handoff = await handlers.kimi_get_handoff({ sessionId: delegated.sessionId });
+    const reviewPackage = buildReviewPackage(delegated.sessionId, handoff);
+    return {
+      sessionId: delegated.sessionId,
+      promptId: delegated.promptId,
+      submitStatus: delegated.status,
+      webUrl: delegated.webUrl,
+      wait,
+      handoff,
+      changedFiles: handoff.changedFiles,
+      reviewPackage,
+    };
+  }
+
   const handlers: ToolHandlers = {
     async kimi_bridge_status() {
       return deps.preflight.getStatus();
@@ -341,51 +452,12 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
         excludeEmpty: input.excludeEmpty,
       });
       return {
-        items: result.items.map((session) => buildRecentSession(deps.config.serverUrl, session)),
+        items: result.items.map((session) => buildRecentSession(deps.config.serverUrl, session, deps.config.serverToken)),
       };
     },
 
     async kimi_find_recent_session(input: FindRecentSessionInput) {
-      const titleContains = input.titleContains.trim();
-      if (titleContains.length === 0) {
-        throw new Error('titleContains 不能为空或仅包含空白字符。');
-      }
-      const safeTitleContains = sanitizeDiagnosticText(titleContains, deps.config.serverToken);
-
-      const result = await deps.kimi.listSessions({
-        pageSize: input.pageSize ?? 20,
-        status: input.status,
-        includeArchive: input.includeArchive,
-        excludeEmpty: input.excludeEmpty,
-      });
-
-      const normalizedQuery = titleContains.toLowerCase();
-      const candidates = result.items
-        .filter((session) => session.title.toLowerCase().includes(normalizedQuery))
-        .map((session) => buildRecentSession(deps.config.serverUrl, session));
-
-      const match = candidates[0];
-
-      const suggestedNextActions = match
-        ? buildFindSuggestions(match)
-        : [
-            `未找到标题包含 "${safeTitleContains}" 的 session。`,
-            '尝试放宽关键词（例如去掉日期、版本号），或调用 kimi_recent_sessions 查看最近 session 列表。',
-            '确认无重复/遗留 session 后再新建任务，避免直接重新 delegate 造成重复。',
-          ];
-
-      return {
-        query: {
-          titleContains: safeTitleContains,
-          ...(input.status !== undefined ? { status: input.status } : {}),
-          ...(input.pageSize !== undefined ? { pageSize: input.pageSize } : {}),
-          ...(input.includeArchive !== undefined ? { includeArchive: input.includeArchive } : {}),
-          ...(input.excludeEmpty !== undefined ? { excludeEmpty: input.excludeEmpty } : {}),
-        },
-        candidates,
-        ...(match ? { match } : {}),
-        suggestedNextActions,
-      };
+      return findRecentSessionByTitle(deps, input);
     },
 
     async kimi_delegate_task(input: DelegateTaskInput) {
@@ -410,42 +482,110 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
     },
 
     async kimi_delegate_and_wait(input: DelegateAndWaitInput) {
+      const supportedDedupeReuseStatuses: Array<RecentSession['status']> = ['running', 'idle', 'awaiting_approval', 'awaiting_question'];
+      const defaultReusableStatuses: string[] = supportedDedupeReuseStatuses;
+
+      if (input.dedupe) {
+        const dedupeInput = input.dedupe;
+        const findResult = await findRecentSessionByTitle(deps, {
+          titleContains: dedupeInput.titleContains,
+          status: dedupeInput.status,
+          pageSize: dedupeInput.pageSize,
+          includeArchive: dedupeInput.includeArchive,
+          excludeEmpty: dedupeInput.excludeEmpty,
+        });
+
+        const reuseIfStatus = dedupeInput.reuseIfStatus ?? defaultReusableStatuses;
+        const match = findResult.match;
+        const userAllowsReuse = match && reuseIfStatus.includes(match.status);
+        const bridgeSupportsReuse = match && supportedDedupeReuseStatuses.includes(match.status);
+        const canReuse = userAllowsReuse && bridgeSupportsReuse;
+
+        if (canReuse) {
+          const baseDedupe: DelegateAndWaitDedupeResult = {
+            checked: true,
+            matched: true,
+            reused: true,
+            match,
+            query: findResult.query,
+            suggestedNextActions: findResult.suggestedNextActions,
+          };
+
+          if (match.status === 'running') {
+            return {
+              sessionId: match.sessionId,
+              promptId: '',
+              submitStatus: 'reused',
+              webUrl: match.webUrl,
+              wait: { status: 'running' },
+              dedupe: { ...baseDedupe, reason: 'running' },
+            };
+          }
+
+          if (match.status === 'idle') {
+            const handoff = await handlers.kimi_get_handoff({ sessionId: match.sessionId });
+            const reviewPackage = buildReviewPackage(match.sessionId, handoff);
+            return {
+              sessionId: match.sessionId,
+              promptId: '',
+              submitStatus: 'reused',
+              webUrl: match.webUrl,
+              wait: { status: 'idle' },
+              handoff,
+              changedFiles: handoff.changedFiles,
+              reviewPackage,
+              dedupe: { ...baseDedupe, reason: 'idle' },
+            };
+          }
+
+          if (match.status === 'awaiting_approval' || match.status === 'awaiting_question') {
+            const wait = await handlers.kimi_wait_until_idle({
+              sessionId: match.sessionId,
+              timeoutMs: 0,
+            });
+            return {
+              sessionId: match.sessionId,
+              promptId: '',
+              submitStatus: 'reused',
+              webUrl: match.webUrl,
+              wait,
+              dedupe: { ...baseDedupe, reason: match.status },
+            };
+          }
+        }
+
+        const delegated = await handlers.kimi_delegate_task(input);
+        const wait = await handlers.kimi_wait_until_idle({
+          sessionId: delegated.sessionId,
+          timeoutMs: input.timeoutMs,
+        });
+        const baseResult = await buildDelegateAndWaitResult(delegated, wait);
+
+        let reason: string | undefined;
+        if (match) {
+          reason = bridgeSupportsReuse ? 'status_not_reusable' : 'status_not_supported';
+        }
+
+        return {
+          ...baseResult,
+          dedupe: {
+            checked: true,
+            matched: !!match,
+            reused: false,
+            ...(match ? { match } : {}),
+            ...(reason ? { reason } : {}),
+            query: findResult.query,
+            suggestedNextActions: findResult.suggestedNextActions,
+          },
+        };
+      }
+
       const delegated = await handlers.kimi_delegate_task(input);
       const wait = await handlers.kimi_wait_until_idle({
         sessionId: delegated.sessionId,
         timeoutMs: input.timeoutMs,
       });
-      if (wait.status !== 'idle') {
-        const result: DelegateAndWaitResult = {
-          sessionId: delegated.sessionId,
-          promptId: delegated.promptId,
-          submitStatus: delegated.status,
-          webUrl: delegated.webUrl,
-          wait,
-        };
-        if (wait.status === 'timeout' || wait.status === 'aborted') {
-          result.diagnostics = await buildDelegateAndWaitDiagnostics(
-            deps.kimi,
-            delegated.sessionId,
-            wait.status,
-            delegated.webUrl,
-            deps.config.serverToken,
-          );
-        }
-        return result;
-      }
-      const handoff = await handlers.kimi_get_handoff({ sessionId: delegated.sessionId });
-      const reviewPackage = buildReviewPackage(delegated.sessionId, handoff);
-      return {
-        sessionId: delegated.sessionId,
-        promptId: delegated.promptId,
-        submitStatus: delegated.status,
-        webUrl: delegated.webUrl,
-        wait,
-        handoff,
-        changedFiles: handoff.changedFiles,
-        reviewPackage,
-      };
+      return buildDelegateAndWaitResult(delegated, wait);
     },
 
     async kimi_wait_until_idle(input: WaitUntilIdleInput) {

@@ -89,10 +89,38 @@ Codex should shape delegated work like this:
 ## Preferred Tool Flow
 
 1. Call `kimi_bridge_status` when diagnosing readiness.
-2. If a previous delegate was interrupted, or you suspect a duplicate/running/aborted session, call `kimi_find_recent_session` (search by title) or `kimi_recent_sessions` first and inspect `status`, `title`, and `webUrl` before delegating again.
-3. Call `kimi_delegate_and_wait` for normal implementation work.
-4. If `wait.status` is `idle`, review the embedded `reviewPackage`.
-5. If `wait.status` is `timeout`, keep `sessionId` and call `kimi_wait_until_idle` later.
-6. If blocked on approval or question, resolve it in Kimi Web and continue the same session.
-7. Use `kimi_continue_task` for Codex review feedback.
-8. Run local verification before accepting work.
+2. If a previous delegate was interrupted, or you suspect a duplicate/running session, prefer passing `dedupe` to `kimi_delegate_and_wait` with a stable `titleContains` substring and the default `reuseIfStatus`.
+3. If you suspect an `aborted` session, call `kimi_find_recent_session` or `kimi_recent_sessions`, inspect the `webUrl`, and use `kimi_continue_task` to resume it. `kimi_delegate_and_wait` will never automatically reuse an aborted session.
+4. If you need more control for other cases, call `kimi_find_recent_session` (search by title) or `kimi_recent_sessions` first and inspect `status`, `title`, and `webUrl` before delegating again.
+5. Call `kimi_delegate_and_wait` for normal implementation work.
+6. If `wait.status` is `idle`, review the embedded `reviewPackage`.
+7. If `wait.status` is `timeout`, keep `sessionId` and call `kimi_wait_until_idle` later.
+8. If blocked on approval or question, resolve it in Kimi Web and continue the same session.
+9. Use `kimi_continue_task` for Codex review feedback.
+10. Run local verification before accepting work.
+
+## Dedupe guard template
+
+When calling `kimi_delegate_and_wait`, include a stable `titleContains` substring so the bridge can detect and reuse an existing session after an interruption or quota recovery:
+
+```json
+{
+  "cwd": "<workspace>",
+  "task": "<short task title used as the session title>",
+  "acceptanceCriteria": ["..."],
+  "plan": ["..."],
+  "dedupe": {
+    "titleContains": "<unique stable substring from the task title>",
+    "status": "<optional status filter>",
+    "pageSize": 20,
+    "reuseIfStatus": ["running", "idle", "awaiting_approval", "awaiting_question"]
+  }
+}
+```
+
+Guidelines:
+
+- Pick a `titleContains` value that is stable across retries but specific enough to avoid matching unrelated sessions.
+- Omit `dedupe` for one-off exploratory tasks where duplicates are not a concern.
+- When `dedupe` returns an existing session, follow `suggestedNextActions` instead of immediately calling `kimi_delegate_task` again.
+- `dedupe` only reuses `running`, `idle`, `awaiting_approval`, and `awaiting_question` sessions. For `aborted` sessions, inspect the `webUrl` and use `kimi_continue_task`.
