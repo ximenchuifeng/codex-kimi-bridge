@@ -199,6 +199,86 @@ describe('KimiPreflight', () => {
     expect(status.cacheFresh).toBe(false);
   });
 
+  it('getStatus returns ready with webBaseUrl, canOpenWeb and nextActions', async () => {
+    const http = makeHttp({ healthz: ['ok'], config: ['ok'] });
+    const preflight = new KimiPreflight(makeConfig({ serverToken: 'super-secret-token', serverTokenSource: 'env' }), http, {
+      pollIntervalMs: 10,
+    });
+
+    const status = await preflight.getStatus();
+    expect(status.status).toBe('ready');
+    expect(status.webBaseUrl).toBe('http://127.0.0.1:58627/');
+    expect(status.canOpenWeb).toBe(true);
+    expect(status.nextActions.length).toBeGreaterThan(0);
+    expect(status.nextActions.some((a) => a.includes('委托'))).toBe(true);
+    expect(JSON.stringify(status)).not.toContain('super-secret-token');
+  });
+
+  it('getStatus returns server_unreachable with auto-start hint when autoStart is true', async () => {
+    const http = makeHttp({ healthz: ['error'] });
+    const spawn = vi.fn(() => makeFakeChildProcess());
+    const preflight = new KimiPreflight(makeConfig({ autoStart: true }), http, { spawn, pollIntervalMs: 10 });
+
+    const status = await preflight.getStatus();
+    expect(status.status).toBe('server_unreachable');
+    expect(status.canOpenWeb).toBe(false);
+    expect(status.webBaseUrl).toBe('http://127.0.0.1:58627/');
+    expect(status.nextActions.some((a) => a.includes('自动'))).toBe(true);
+    expect(status.nextActions.some((a) => a.includes('--keep-alive'))).toBe(true);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('getStatus returns server_unreachable with manual start hint when autoStart is false', async () => {
+    const http = makeHttp({ healthz: ['error'] });
+    const spawn = vi.fn(() => makeFakeChildProcess());
+    const preflight = new KimiPreflight(makeConfig({ autoStart: false }), http, { spawn });
+
+    const status = await preflight.getStatus();
+    expect(status.status).toBe('server_unreachable');
+    expect(status.canOpenWeb).toBe(false);
+    expect(status.nextActions.some((a) => a.includes('手动启动'))).toBe(true);
+    expect(status.nextActions.some((a) => a.includes('KIMI_AUTO_START'))).toBe(true);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('getStatus returns auth_failed with token suggestions and no token leak', async () => {
+    const http = makeHttp({ healthz: ['ok'], config: ['error'] });
+    const preflight = new KimiPreflight(makeConfig({ serverToken: 'leaked-token', serverTokenSource: 'env' }), http, {
+      pollIntervalMs: 10,
+    });
+
+    const status = await preflight.getStatus();
+    expect(status.status).toBe('auth_failed');
+    expect(status.healthzOk).toBe(true);
+    expect(status.authOk).toBe(false);
+    expect(status.canOpenWeb).toBe(true);
+    expect(status.nextActions.some((a) => a.includes('KIMI_SERVER_TOKEN'))).toBe(true);
+    expect(status.nextActions.some((a) => a.includes('KIMI_CODE_HOME'))).toBe(true);
+    expect(status.nextActions.some((a) => a.includes('--dangerous-bypass-auth'))).toBe(true);
+    expect(JSON.stringify(status)).not.toContain('leaked-token');
+  });
+
+  it('getStatus does not use or update the success cache', async () => {
+    const http = makeHttp({ healthz: ['ok', 'ok', 'ok'], config: ['ok', 'ok', 'ok'] });
+    let time = 0;
+    const preflight = new KimiPreflight(makeConfig({ preflightCacheMs: 5000 }), http, { now: () => time });
+
+    const first = await preflight.ensureReady();
+    expect(first.status).toBe('ready');
+    expect(http.get).toHaveBeenCalledTimes(2);
+
+    time = 1000;
+    const status = await preflight.getStatus();
+    expect(status.status).toBe('ready');
+    expect(status.cacheFresh).toBe(false);
+    expect(http.get).toHaveBeenCalledTimes(4);
+
+    const cached = await preflight.ensureReady();
+    expect(cached.cacheFresh).toBe(true);
+    expect(cached.status).toBe('ready');
+    expect(http.get).toHaveBeenCalledTimes(4);
+  });
+
   describe('success cache', () => {
     it('caches a successful ensureReady result and reuses it within the cache window', async () => {
       const http = makeHttp({ healthz: ['ok'], config: ['ok'] });

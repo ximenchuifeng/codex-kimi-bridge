@@ -6,8 +6,11 @@ import type { KimiHttpClient } from './kimi/http.js';
 
 export interface BridgeStatus {
   serverUrl: string;
+  webBaseUrl: string;
+  canOpenWeb: boolean;
   healthzOk: boolean;
   authOk: boolean;
+  status: 'ready' | 'server_unreachable' | 'auth_failed';
   tokenSource: TokenSource;
   autoStart: boolean;
   kimiCommand: string;
@@ -16,6 +19,7 @@ export interface BridgeStatus {
   cacheAgeMs?: number;
   cachedUntil?: number;
   diagnostics: string[];
+  nextActions: string[];
 }
 
 export interface PreflightOptions {
@@ -130,17 +134,48 @@ export class KimiPreflight {
   }
 
   private buildStatus(healthzOk: boolean, authOk: boolean, diagnostics: string[]): BridgeStatus {
+    const status = healthzOk ? (authOk ? 'ready' : 'auth_failed') : 'server_unreachable';
+    const webBaseUrl = `${this.config.serverUrl}/`;
     return {
       serverUrl: this.config.serverUrl,
+      webBaseUrl,
+      canOpenWeb: healthzOk,
       healthzOk,
       authOk,
+      status,
       tokenSource: this.config.serverTokenSource,
       autoStart: this.config.autoStart,
       kimiCommand: this.config.kimiCommand,
       preflightCacheMs: this.config.preflightCacheMs,
       cacheFresh: false,
       diagnostics,
+      nextActions: this.buildNextActions(status),
     };
+  }
+
+  private buildNextActions(status: BridgeStatus['status']): string[] {
+    if (status === 'ready') {
+      return [
+        '可以继续委托任务给 Kimi。',
+        '可在浏览器中打开 webBaseUrl，或在任务返回的 webUrl 中查看 session。',
+      ];
+    }
+    if (status === 'server_unreachable') {
+      if (this.config.autoStart) {
+        return [
+          '下一次任务调用会自动尝试启动 Kimi server。',
+          '也可以手动运行：kimi server run --keep-alive',
+        ];
+      }
+      return [
+        '请手动启动 Kimi server，例如：kimi server run --keep-alive',
+        '或设置 KIMI_AUTO_START=true 让 bridge 在需要时自动启动。',
+      ];
+    }
+    return [
+      '请检查 KIMI_SERVER_TOKEN 是否有效，以及 bridge 与 Kimi server 使用的 KIMI_CODE_HOME 是否一致。',
+      '本地 smoke 测试可临时使用 --dangerous-bypass-auth 启动 Kimi server。',
+    ];
   }
 
   private async checkAuth(): Promise<boolean> {

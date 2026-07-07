@@ -42,14 +42,18 @@ function makePreflight(overrides: Partial<import('../src/preflight.js').BridgeSt
     ensureReady: vi.fn(async () => ({ healthzOk: true, authOk: true, preflightCacheMs: 5000, ...overrides })),
     getStatus: vi.fn(async () => ({
       serverUrl: 'http://127.0.0.1:58627',
+      webBaseUrl: 'http://127.0.0.1:58627/',
+      canOpenWeb: true,
       healthzOk: true,
       authOk: true,
+      status: 'ready',
       tokenSource: 'home',
       autoStart: true,
       kimiCommand: 'kimi',
       diagnostics: [],
       preflightCacheMs: 5000,
       cacheFresh: false,
+      nextActions: ['可以继续委托任务给 Kimi。', '可在浏览器中打开 webBaseUrl 查看 session。'],
       ...overrides,
     })),
   } as unknown as KimiPreflight;
@@ -261,6 +265,10 @@ describe('tool handlers', () => {
     const status = await handlers.kimi_bridge_status();
     expect(status.tokenSource).toBe('home');
     expect(status.serverUrl).toBe('http://127.0.0.1:58627');
+    expect(status.webBaseUrl).toBe('http://127.0.0.1:58627/');
+    expect(status.status).toBe('ready');
+    expect(status.canOpenWeb).toBe(true);
+    expect(status.nextActions.length).toBeGreaterThan(0);
     expect(status.autoStart).toBe(true);
     expect(status.kimiCommand).toBe('kimi');
     expect(JSON.stringify(status)).not.toContain('super-secret-token');

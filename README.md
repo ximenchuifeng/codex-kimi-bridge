@@ -59,7 +59,23 @@ The bridge preflights the Kimi server before each tool call. A successful prefli
 - Set to `0` to disable caching and check every time.
 - Malformed or negative values fall back to `5000`.
 
-The `kimi_bridge_status` tool always performs a live check and does not use or update the success cache, so it reflects the current server state.
+The `kimi_bridge_status` tool always performs a live check and does not use or update the success cache, so it reflects the current server state. It returns a read-only diagnostic object with the following fields:
+
+- `serverUrl`: the normalized Kimi server base URL.
+- `webBaseUrl`: `<serverUrl>/`, a safe URL you can open in a browser. It never includes a token.
+- `canOpenWeb`: `true` when `healthzOk` is `true`.
+- `healthzOk`: whether the server `/healthz` endpoint responded.
+- `authOk`: whether the server `/config` endpoint accepted the resolved token.
+- `status`: one of `ready`, `server_unreachable`, or `auth_failed`.
+- `nextActions`: human-readable suggestions for what to do next. The messages are localized to Chinese and guide you based on the current state:
+  - `ready`: indicates you can keep delegating tasks and open `webBaseUrl` or a task's `webUrl` to view the session.
+  - `server_unreachable` with `autoStart=true`: the next task call will try to auto-start the server, or you can run `kimi server run --keep-alive` manually.
+  - `server_unreachable` with `autoStart=false`: start the server manually or set `KIMI_AUTO_START=true`.
+  - `auth_failed`: check `KIMI_SERVER_TOKEN` / `KIMI_CODE_HOME`, or for local smoke testing start Kimi with `--dangerous-bypass-auth`.
+- `diagnostics`: technical messages from the latest live checks. Token values are never included.
+- `tokenSource`, `autoStart`, `kimiCommand`, `preflightCacheMs`, `cacheFresh`, `cacheAgeMs`, `cachedUntil`: configuration and cache metadata.
+
+`kimi_bridge_status` is safe to call at any time: it does not trigger auto-start, refresh the token, or modify the success cache.
 
 ### Local smoke test with auth disabled
 
