@@ -204,6 +204,52 @@ describe('tool handlers', () => {
     expect(kimi.getFileDiff).toHaveBeenCalledWith('s1', 'tmp/');
   });
 
+  it('preflights before generating a review package', async () => {
+    const preflight = makePreflight();
+    const handlers = createToolHandlers({ kimi: makeKimi(), config: makeConfig(), preflight });
+
+    await handlers.kimi_review_package({ sessionId: 's1' });
+
+    expect(preflight.ensureReady).toHaveBeenCalled();
+  });
+
+  it('returns a review package with handoff, changedFiles, diffStats, and checklist', async () => {
+    const kimi = makeKimi({
+      getStatus: vi.fn(async () => ({ status: 'idle' })),
+      listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done\n- src/a.ts' }]),
+      getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M', 'src/b.ts': 'M' }, additions: 10, deletions: 2 })),
+      getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: path === 'src/a.ts' ? '@@ diff' : '' })),
+      getSession: vi.fn(async () => ({ id: 's1', title: 'test', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 })),
+    });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    const result = await handlers.kimi_review_package({ sessionId: 's1' });
+
+    expect(result.sessionId).toBe('s1');
+    expect(result.webUrl).toBe('http://127.0.0.1:58627/sessions/s1');
+    expect(result.handoff).toMatchObject({ status: 'idle', changedFiles: ['src/a.ts', 'src/b.ts'], additions: 10, deletions: 2 });
+    expect(result.changedFiles).toEqual(result.handoff.changedFiles);
+    expect(result.diffStats).toEqual({ filesChanged: 2, additions: 10, deletions: 2, diffsWithContent: 1 });
+    expect(result.reviewChecklist).toContain('检查 changedFiles 是否符合 scope');
+    expect(result.reviewChecklist).toContain('检查 tests/verification 是否在 handoff 中出现');
+    expect(result.reviewChecklist).toContain('检查 diff 是否包含无关改动');
+    expect(result.reviewChecklist).toContain('必要时继续调用 kimi_continue_task');
+  });
+
+  it('url-encodes the session id in the review package webUrl', async () => {
+    const kimi = makeKimi({
+      getStatus: vi.fn(async () => ({ status: 'idle' })),
+      listMessages: vi.fn(async () => []),
+      getGitStatus: vi.fn(async () => ({ entries: {}, additions: 0, deletions: 0 })),
+      getSession: vi.fn(async () => ({ id: 'review/session 1', title: 'test', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 })),
+    });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    const result = await handlers.kimi_review_package({ sessionId: 'review/session 1' });
+
+    expect(result.webUrl).toBe('http://127.0.0.1:58627/sessions/review%2Fsession%201');
+  });
+
   it('continues a task by submitting a follow-up prompt', async () => {
     const kimi = makeKimi();
     const handlers = createToolHandlers({ kimi, config: makeConfig(), preflight: makePreflight() });

@@ -129,6 +129,14 @@ export async function main(): Promise<void> {
   );
 
   server.tool(
+    'kimi_review_package',
+    {
+      sessionId: z.string(),
+    },
+    async (input) => runToolHandler(() => handlers.kimi_review_package(input)),
+  );
+
+  server.tool(
     'kimi_continue_task',
     {
       sessionId: z.string(),

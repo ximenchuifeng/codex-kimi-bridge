@@ -43,6 +43,10 @@ export interface GetHandoffInput {
   sessionId: string;
 }
 
+export interface ReviewPackageInput {
+  sessionId: string;
+}
+
 export interface ContinueTaskInput {
   sessionId: string;
   task: string;
@@ -72,11 +76,26 @@ export interface DelegateAndWaitResult {
   changedFiles?: string[];
 }
 
+export interface ReviewPackageResult {
+  sessionId: string;
+  webUrl: string;
+  handoff: KimiHandoff;
+  changedFiles: string[];
+  diffStats: {
+    filesChanged: number;
+    additions: number;
+    deletions: number;
+    diffsWithContent: number;
+  };
+  reviewChecklist: string[];
+}
+
 export interface ToolHandlers {
   kimi_delegate_task: (input: DelegateTaskInput) => Promise<{ sessionId: string; promptId: string; status: string; webUrl: string }>;
   kimi_delegate_and_wait: (input: DelegateAndWaitInput) => Promise<DelegateAndWaitResult>;
   kimi_wait_until_idle: (input: WaitUntilIdleInput) => Promise<WaitUntilIdleResult>;
   kimi_get_handoff: (input: GetHandoffInput) => Promise<KimiHandoff>;
+  kimi_review_package: (input: ReviewPackageInput) => Promise<ReviewPackageResult>;
   kimi_continue_task: (input: ContinueTaskInput) => Promise<{ sessionId: string; promptId: string; status: string; webUrl: string }>;
   kimi_get_diff: (input: GetDiffInput) => Promise<{ path: string; diff: string }>;
   kimi_abort: (input: AbortInput) => Promise<{ sessionId: string; aborted: true }>;
@@ -221,6 +240,29 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
       return buildHandoff({ messages, gitStatus, diffs, waitStatus: status.status, changedFiles });
     },
 
+    async kimi_review_package(input: ReviewPackageInput) {
+      const handoff = await handlers.kimi_get_handoff(input);
+      const diffsWithContent = handoff.diffs.filter((d) => d.diff.length > 0).length;
+      return {
+        sessionId: input.sessionId,
+        webUrl: buildWebUrl(deps.config.serverUrl, input.sessionId),
+        handoff,
+        changedFiles: handoff.changedFiles,
+        diffStats: {
+          filesChanged: handoff.changedFiles.length,
+          additions: handoff.additions,
+          deletions: handoff.deletions,
+          diffsWithContent,
+        },
+        reviewChecklist: [
+          '检查 changedFiles 是否符合 scope',
+          '检查 tests/verification 是否在 handoff 中出现',
+          '检查 diff 是否包含无关改动',
+          '必要时继续调用 kimi_continue_task',
+        ],
+      };
+    },
+
     async kimi_continue_task(input: ContinueTaskInput) {
       const prompt = buildContinuationPrompt({
         sessionId: input.sessionId,
@@ -256,6 +298,7 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
     kimi_delegate_and_wait: withPreflight(deps.preflight, handlers.kimi_delegate_and_wait),
     kimi_wait_until_idle: withPreflight(deps.preflight, handlers.kimi_wait_until_idle),
     kimi_get_handoff: withPreflight(deps.preflight, handlers.kimi_get_handoff),
+    kimi_review_package: withPreflight(deps.preflight, handlers.kimi_review_package),
     kimi_continue_task: withPreflight(deps.preflight, handlers.kimi_continue_task),
     kimi_get_diff: withPreflight(deps.preflight, handlers.kimi_get_diff),
     kimi_abort: withPreflight(deps.preflight, handlers.kimi_abort),

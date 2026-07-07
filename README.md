@@ -146,7 +146,7 @@ echo -n "your-kimi-server-token" > ~/.kimi-code/server.token
 
 ## Web session links
 
-Both `kimi_delegate_task` and `kimi_continue_task` return a `webUrl` pointing to the Kimi Web view of the session:
+Both `kimi_delegate_task`, `kimi_continue_task`, and `kimi_review_package` return a `webUrl` pointing to the Kimi Web view of the session:
 
 ```text
 <serverUrl>/sessions/<sessionId>
@@ -165,6 +165,22 @@ The result includes:
 - `handoff` and `changedFiles` only when `wait.status` is `idle`
 
 If the result is `timeout`, keep the `sessionId` and call `kimi_wait_until_idle` or `kimi_get_handoff` later. If it is blocked, resolve the approval/question in Kimi and continue the same session.
+
+### Review package for Codex review
+
+After `kimi_delegate_and_wait` returns `idle`, call `kimi_review_package` to prepare a structured review package for Codex. It takes a `sessionId` and returns:
+
+- `sessionId` and `webUrl`: the same session link returned by other tools.
+- `handoff`: the full handoff from `kimi_get_handoff`, including `finalMessage`, `changedFiles`, `additions`, `deletions`, and `diffs`.
+- `changedFiles`: alias of `handoff.changedFiles`.
+- `diffStats`: summary counts:
+  - `filesChanged`
+  - `additions`
+  - `deletions`
+  - `diffsWithContent`: number of diffs whose `diff` string is non-empty.
+- `reviewChecklist`: a list of reminders for Codex, such as checking scope, tests, unrelated changes, and whether to call `kimi_continue_task`.
+
+Use this tool to normalize the review step instead of manually reading `handoff` and `diffs`.
 
 ## Model Resolution
 
