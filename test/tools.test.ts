@@ -366,7 +366,7 @@ describe('tool handlers', () => {
     });
   });
 
-  it('delegates, waits, and returns a handoff when idle', async () => {
+  it('delegates, waits, and returns a handoff and reviewPackage when idle', async () => {
     const kimi = makeKimi({
       createSession: vi.fn(async () => ({ id: 's1' })),
       submitPrompt: vi.fn(async () => ({ prompt_id: 'p1', user_message_id: 'm1', status: 'running' })),
@@ -395,6 +395,13 @@ describe('tool handlers', () => {
     });
     expect(result.handoff?.changedFiles).toEqual(['src/a.ts']);
     expect(result.changedFiles).toEqual(['src/a.ts']);
+    expect(result.reviewPackage).toBeDefined();
+    expect(result.reviewPackage?.sessionId).toBe('s1');
+    expect(result.reviewPackage?.webUrl).toBe('http://127.0.0.1:58627/sessions/s1');
+    expect(result.reviewPackage?.handoff).toBe(result.handoff);
+    expect(result.reviewPackage?.changedFiles).toEqual(result.handoff?.changedFiles);
+    expect(result.reviewPackage?.diffStats).toEqual({ filesChanged: 1, additions: 4, deletions: 1, diffsWithContent: 1 });
+    expect(result.reviewPackage?.reviewChecklist.length).toBeGreaterThan(0);
   });
 
   it('returns session details without handoff when delegate_and_wait times out', async () => {
@@ -417,6 +424,7 @@ describe('tool handlers', () => {
     expect(result.wait).toEqual({ status: 'timeout' });
     expect(result.handoff).toBeUndefined();
     expect(result.changedFiles).toBeUndefined();
+    expect(result.reviewPackage).toBeUndefined();
     expect(result.sessionId).toBe('s1');
     expect(result.webUrl).toBe('http://127.0.0.1:58627/sessions/s1');
   });
@@ -440,6 +448,7 @@ describe('tool handlers', () => {
       approvals: [{ approval_id: 'a1', tool_name: 'Bash' }],
     });
     expect(result.handoff).toBeUndefined();
+    expect(result.reviewPackage).toBeUndefined();
   });
 
   it('returns pending questions when delegate_and_wait is blocked on a question', async () => {
@@ -461,6 +470,33 @@ describe('tool handlers', () => {
       questions: [{ question_id: 'q1', questions: [] }],
     });
     expect(result.handoff).toBeUndefined();
+    expect(result.reviewPackage).toBeUndefined();
+  });
+
+  it('idle delegate_and_wait fetches handoff only once', async () => {
+    const getGitStatus = vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 }));
+    const kimi = makeKimi({
+      createSession: vi.fn(async () => ({ id: 's1' })),
+      submitPrompt: vi.fn(async () => ({ prompt_id: 'p1', user_message_id: 'm1', status: 'running' })),
+      getStatus: vi.fn(async () => ({ status: 'idle' })),
+      listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done' }]),
+      getGitStatus,
+      getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ diff' })),
+      getSession: vi.fn(async () => ({ id: 's1', title: 'test', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 })),
+    });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    const result = await handlers.kimi_delegate_and_wait({
+      cwd: '/repo',
+      task: 'implement x',
+      acceptanceCriteria: ['tests pass'],
+      plan: ['edit src/a.ts'],
+      timeoutMs: 1000,
+    });
+
+    expect(result.wait.status).toBe('idle');
+    expect(getGitStatus).toHaveBeenCalledTimes(1);
+    expect(result.reviewPackage?.handoff).toBe(result.handoff);
   });
 
   it('delegate_and_wait reuses an existing session id', async () => {

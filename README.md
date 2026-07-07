@@ -163,12 +163,15 @@ The result includes:
 - `sessionId`, `promptId`, `submitStatus`, and `webUrl`
 - `wait`, including `idle`, `timeout`, `awaiting_approval`, or `awaiting_question`
 - `handoff` and `changedFiles` only when `wait.status` is `idle`
+- `reviewPackage` only when `wait.status` is `idle`, with the same structure as `kimi_review_package`
 
-If the result is `timeout`, keep the `sessionId` and call `kimi_wait_until_idle` or `kimi_get_handoff` later. If it is blocked, resolve the approval/question in Kimi and continue the same session.
+When `wait.status` is `idle`, the returned `reviewPackage` is ready for Codex review immediately. It contains `sessionId`, `webUrl`, `handoff`, `changedFiles`, `diffStats`, and `reviewChecklist`, and it shares the same `handoff` object as the top-level `handoff` field. Codex should prefer using this embedded review package for the first review so that diff content is not lost before a separate `kimi_review_package` call.
+
+If the result is `timeout`, keep the `sessionId` and call `kimi_wait_until_idle` or `kimi_get_handoff` later. If it is blocked, resolve the approval/question in Kimi and continue the same session. Non-`idle` results do not include `handoff` or `reviewPackage`.
 
 ### Review package for Codex review
 
-After `kimi_delegate_and_wait` returns `idle`, call `kimi_review_package` to prepare a structured review package for Codex. It takes a `sessionId` and returns:
+`kimi_review_package` prepares a structured review package for Codex. It takes a `sessionId` and returns:
 
 - `sessionId` and `webUrl`: the same session link returned by other tools.
 - `handoff`: the full handoff from `kimi_get_handoff`, including `finalMessage`, `changedFiles`, `additions`, `deletions`, and `diffs`.
@@ -180,7 +183,7 @@ After `kimi_delegate_and_wait` returns `idle`, call `kimi_review_package` to pre
   - `diffsWithContent`: number of diffs whose `diff` string is non-empty.
 - `reviewChecklist`: a list of reminders for Codex, such as checking scope, tests, unrelated changes, and whether to call `kimi_continue_task`.
 
-Use this tool to normalize the review step instead of manually reading `handoff` and `diffs`.
+Use this tool to normalize the review step instead of manually reading `handoff` and `diffs`. When `kimi_delegate_and_wait` already returned `idle` with an embedded `reviewPackage`, you can review that package directly; call `kimi_review_package` afterward only if you need to re-fetch the latest handoff for the same session.
 
 ## Model Resolution
 

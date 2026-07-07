@@ -74,6 +74,7 @@ export interface DelegateAndWaitResult {
   wait: WaitUntilIdleResult;
   handoff?: KimiHandoff;
   changedFiles?: string[];
+  reviewPackage?: ReviewPackageResult;
 }
 
 export interface ReviewPackageResult {
@@ -146,6 +147,28 @@ const defaultFileLister: FileLister = {
 };
 
 export function createToolHandlers(deps: ToolDeps): ToolHandlers {
+  function buildReviewPackage(sessionId: string, handoff: KimiHandoff): ReviewPackageResult {
+    const diffsWithContent = handoff.diffs.filter((d) => d.diff.length > 0).length;
+    return {
+      sessionId,
+      webUrl: buildWebUrl(deps.config.serverUrl, sessionId),
+      handoff,
+      changedFiles: handoff.changedFiles,
+      diffStats: {
+        filesChanged: handoff.changedFiles.length,
+        additions: handoff.additions,
+        deletions: handoff.deletions,
+        diffsWithContent,
+      },
+      reviewChecklist: [
+        '检查 changedFiles 是否符合 scope',
+        '检查 tests/verification 是否在 handoff 中出现',
+        '检查 diff 是否包含无关改动',
+        '必要时继续调用 kimi_continue_task',
+      ],
+    };
+  }
+
   const handlers: ToolHandlers = {
     async kimi_bridge_status() {
       return deps.preflight.getStatus();
@@ -188,6 +211,7 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
         };
       }
       const handoff = await handlers.kimi_get_handoff({ sessionId: delegated.sessionId });
+      const reviewPackage = buildReviewPackage(delegated.sessionId, handoff);
       return {
         sessionId: delegated.sessionId,
         promptId: delegated.promptId,
@@ -196,6 +220,7 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
         wait,
         handoff,
         changedFiles: handoff.changedFiles,
+        reviewPackage,
       };
     },
 
@@ -242,25 +267,7 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
 
     async kimi_review_package(input: ReviewPackageInput) {
       const handoff = await handlers.kimi_get_handoff(input);
-      const diffsWithContent = handoff.diffs.filter((d) => d.diff.length > 0).length;
-      return {
-        sessionId: input.sessionId,
-        webUrl: buildWebUrl(deps.config.serverUrl, input.sessionId),
-        handoff,
-        changedFiles: handoff.changedFiles,
-        diffStats: {
-          filesChanged: handoff.changedFiles.length,
-          additions: handoff.additions,
-          deletions: handoff.deletions,
-          diffsWithContent,
-        },
-        reviewChecklist: [
-          '检查 changedFiles 是否符合 scope',
-          '检查 tests/verification 是否在 handoff 中出现',
-          '检查 diff 是否包含无关改动',
-          '必要时继续调用 kimi_continue_task',
-        ],
-      };
+      return buildReviewPackage(input.sessionId, handoff);
     },
 
     async kimi_continue_task(input: ContinueTaskInput) {
