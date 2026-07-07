@@ -173,6 +173,17 @@ export async function main(): Promise<void> {
     async () => runToolHandler(() => handlers.kimi_bridge_status()),
   );
 
+  server.tool(
+    'kimi_recent_sessions',
+    {
+      pageSize: z.number().optional(),
+      status: z.string().optional(),
+      includeArchive: z.boolean().optional(),
+      excludeEmpty: z.boolean().optional(),
+    },
+    async (input) => runToolHandler(() => handlers.kimi_recent_sessions(input)),
+  );
+
   await server.connect(new StdioServerTransport());
 }
 

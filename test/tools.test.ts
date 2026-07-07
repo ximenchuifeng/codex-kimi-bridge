@@ -17,6 +17,7 @@ function makeKimi(overrides: Record<string, unknown> = {}): KimiClient {
     resolveDefaultModel: vi.fn(async () => 'kimi-k2') as unknown as KimiClient['resolveDefaultModel'],
     listPendingApprovals: vi.fn(async () => []) as unknown as KimiClient['listPendingApprovals'],
     listPendingQuestions: vi.fn(async () => []) as unknown as KimiClient['listPendingQuestions'],
+    listSessions: vi.fn(async () => ({ items: [] })) as unknown as KimiClient['listSessions'],
     ...overrides,
   } as KimiClient;
 }
@@ -528,5 +529,117 @@ describe('tool handlers', () => {
     });
 
     expect(preflight.ensureReady).toHaveBeenCalledTimes(1);
+  });
+
+  it('preflights before listing recent sessions', async () => {
+    const preflight = makePreflight();
+    const handlers = createToolHandlers({ kimi: makeKimi(), config: makeConfig(), preflight });
+
+    await handlers.kimi_recent_sessions({});
+
+    expect(preflight.ensureReady).toHaveBeenCalled();
+  });
+
+  it('lists recent sessions with default pageSize 10', async () => {
+    const kimi = makeKimi({
+      listSessions: vi.fn(async () => ({
+        items: [
+          { id: 's1', title: 'Task 1', status: 'running', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+        ],
+      })),
+    });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    const result = await handlers.kimi_recent_sessions({});
+
+    expect(kimi.listSessions).toHaveBeenCalledWith({ pageSize: 10 });
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toMatchObject({ sessionId: 's1', title: 'Task 1', status: 'running' });
+    expect(result.items[0].webUrl).toBe('http://127.0.0.1:58627/sessions/s1');
+  });
+
+  it('passes status, includeArchive, and excludeEmpty to listSessions', async () => {
+    const kimi = makeKimi({
+      listSessions: vi.fn(async () => ({ items: [] })),
+    });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    await handlers.kimi_recent_sessions({ pageSize: 20, status: 'running', includeArchive: true, excludeEmpty: true });
+
+    expect(kimi.listSessions).toHaveBeenCalledWith({
+      pageSize: 20,
+      status: 'running',
+      includeArchive: true,
+      excludeEmpty: true,
+    });
+  });
+
+  it('url-encodes session ids in recent session webUrls', async () => {
+    const kimi = makeKimi({
+      listSessions: vi.fn(async () => ({
+        items: [
+          { id: 'a/b c', title: 'Task', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+        ],
+      })),
+    });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    const result = await handlers.kimi_recent_sessions({});
+
+    expect(result.items[0].webUrl).toBe('http://127.0.0.1:58627/sessions/a%2Fb%20c');
+  });
+
+  it('passes through createdAt and updatedAt when present', async () => {
+    const kimi = makeKimi({
+      listSessions: vi.fn(async () => ({
+        items: [
+          { id: 's1', title: 'Task', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-02T00:00:00Z' },
+        ],
+      })),
+    });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    const result = await handlers.kimi_recent_sessions({});
+
+    expect(result.items[0].createdAt).toBe('2026-01-01T00:00:00Z');
+    expect(result.items[0].updatedAt).toBe('2026-01-02T00:00:00Z');
+  });
+
+  it('redacts token-like values in recent session titles', async () => {
+    const kimi = makeKimi({
+      listSessions: vi.fn(async () => ({
+        items: [
+          { id: 's1', title: 'open http://127.0.0.1:58627/#token=super-secret-token', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+          { id: 's2', title: 'open http://127.0.0.1:58627/?token=another-secret&x=1', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+        ],
+      })),
+    });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    const result = await handlers.kimi_recent_sessions({});
+
+    expect(JSON.stringify(result)).not.toContain('super-secret-token');
+    expect(JSON.stringify(result)).not.toContain('another-secret');
+    expect(result.items[0].title).toContain('#token=[redacted]');
+    expect(result.items[1].title).toContain('token=[redacted]');
+  });
+
+  it('does not leak bridge config token in recent session results', async () => {
+    const kimi = makeKimi({
+      listSessions: vi.fn(async () => ({
+        items: [
+          { id: 's1', title: 'Task', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+        ],
+      })),
+    });
+    const handlers = createToolHandlers({
+      kimi: kimi as never,
+      config: makeConfig({ serverToken: 'super-secret-token' }),
+      preflight: makePreflight(),
+    });
+
+    const result = await handlers.kimi_recent_sessions({});
+
+    expect(JSON.stringify(result)).not.toContain('super-secret-token');
   });
 });

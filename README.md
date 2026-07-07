@@ -154,6 +154,26 @@ Both `kimi_delegate_task`, `kimi_continue_task`, and `kimi_review_package` retur
 
 The `sessionId` is URL-encoded, and the link intentionally contains no server token or authentication query parameters. If you have already opened and authenticated with Kimi Web in your browser, you can visit `webUrl` directly. If you have not yet authenticated, the Kimi Web UI will prompt you to authenticate before showing the session.
 
+### Recent sessions
+
+Use `kimi_recent_sessions` to inspect recent Kimi sessions before delegating more work. This helps avoid orphaned or duplicate sessions when a previous `kimi_delegate_and_wait` was interrupted (for example, by pressing Esc) or when you are unsure whether a task is still running.
+
+Input fields (all optional):
+
+- `pageSize`: number of sessions to return. Default: `10`.
+- `status`: filter by session status such as `idle`, `running`, `awaiting_approval`, `awaiting_question`, or `aborted`.
+- `includeArchive`: include archived sessions.
+- `excludeEmpty`: exclude sessions with no messages.
+
+The response contains an `items` array. Each item includes:
+
+- `sessionId`, `status`, `title`, and `webUrl`
+- `createdAt` and `updatedAt` when the server provides them
+
+No token or authorization information is returned.
+
+If you suspect a duplicate or still-running session, call `kimi_recent_sessions` first and check the `status` and `webUrl` instead of blindly starting another `kimi_delegate_task`.
+
 ### One-call delegate and wait
 
 Use `kimi_delegate_and_wait` when you want the bridge to perform the mechanical delegate/wait/handoff sequence in one MCP call. Codex still reviews the returned handoff and decides whether to accept the work or continue the session.

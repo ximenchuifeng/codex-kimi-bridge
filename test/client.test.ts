@@ -74,4 +74,27 @@ describe('KimiClient', () => {
     await expect(client.getSession('s1')).resolves.toMatchObject({ id: 's1', metadata: { cwd: '/repo' } });
     expect(http.get).toHaveBeenCalledWith('/sessions/s1');
   });
+
+  it('lists sessions with mapped query fields', async () => {
+    const http: HttpPort = {
+      post: vi.fn(),
+      get: vi.fn(async () => ({
+        items: [
+          { id: 's1', title: 'Task 1', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0, created_at: '2026-01-01T00:00:00Z' },
+          { id: 's2', title: 'Task 2', status: 'running', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 1 },
+        ],
+      })) as HttpPort['get'],
+    };
+    const client = new KimiClient(http);
+
+    const result = await client.listSessions({ pageSize: 5, status: 'running', includeArchive: true, excludeEmpty: true });
+
+    expect(result.items).toHaveLength(2);
+    expect(http.get).toHaveBeenCalledWith('/sessions', {
+      page_size: 5,
+      status: 'running',
+      include_archive: true,
+      exclude_empty: true,
+    });
+  });
 });

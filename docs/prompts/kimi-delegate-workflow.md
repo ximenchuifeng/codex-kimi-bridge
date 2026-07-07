@@ -89,9 +89,10 @@ Codex should shape delegated work like this:
 ## Preferred Tool Flow
 
 1. Call `kimi_bridge_status` when diagnosing readiness.
-2. Call `kimi_delegate_and_wait` for normal implementation work.
-3. If `wait.status` is `idle`, review the embedded `reviewPackage`.
-4. If `wait.status` is `timeout`, keep `sessionId` and call `kimi_wait_until_idle` later.
-5. If blocked on approval or question, resolve it in Kimi Web and continue the same session.
-6. Use `kimi_continue_task` for Codex review feedback.
-7. Run local verification before accepting work.
+2. If a previous delegate was interrupted, or you suspect a duplicate/running/aborted session, call `kimi_recent_sessions` first and inspect `status`, `title`, and `webUrl` before delegating again.
+3. Call `kimi_delegate_and_wait` for normal implementation work.
+4. If `wait.status` is `idle`, review the embedded `reviewPackage`.
+5. If `wait.status` is `timeout`, keep `sessionId` and call `kimi_wait_until_idle` later.
+6. If blocked on approval or question, resolve it in Kimi Web and continue the same session.
+7. Use `kimi_continue_task` for Codex review feedback.
+8. Run local verification before accepting work.

@@ -4,6 +4,7 @@ import type { KimiHandoff } from './handoff.js';
 import type { KimiClient } from './kimi/client.js';
 import { waitUntilIdle, type WaitUntilIdleResult } from './kimi/wait.js';
 import { buildHandoff, expandGitStatusEntries } from './handoff.js';
+import type { ListSessionsInput, RecentSession, WireSession } from './kimi/types.js';
 import type { BridgeStatus, KimiPreflight } from './preflight.js';
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
@@ -66,6 +67,17 @@ export interface AbortInput {
   sessionId: string;
 }
 
+export interface RecentSessionsInput {
+  pageSize?: number;
+  status?: string;
+  includeArchive?: boolean;
+  excludeEmpty?: boolean;
+}
+
+export interface RecentSessionsResult {
+  items: RecentSession[];
+}
+
 export interface DelegateAndWaitResult {
   sessionId: string;
   promptId: string;
@@ -101,6 +113,7 @@ export interface ToolHandlers {
   kimi_get_diff: (input: GetDiffInput) => Promise<{ path: string; diff: string }>;
   kimi_abort: (input: AbortInput) => Promise<{ sessionId: string; aborted: true }>;
   kimi_bridge_status: () => Promise<BridgeStatus>;
+  kimi_recent_sessions: (input: RecentSessionsInput) => Promise<RecentSessionsResult>;
 }
 
 function withPreflight<T extends unknown[], R>(
@@ -127,6 +140,23 @@ async function resolveModel(
 
 function buildWebUrl(serverUrl: string, sessionId: string): string {
   return `${serverUrl}/sessions/${encodeURIComponent(sessionId)}`;
+}
+
+function sanitizeSessionTitle(title: string): string {
+  return title
+    .replace(/#token=[^\s]+/gi, '#token=[redacted]')
+    .replace(/([?&]token=)[^&\s]+/gi, '$1[redacted]');
+}
+
+function buildRecentSession(serverUrl: string, session: WireSession & { created_at?: string; updated_at?: string }): RecentSession {
+  return {
+    sessionId: session.id,
+    status: session.status,
+    title: sanitizeSessionTitle(session.title),
+    webUrl: buildWebUrl(serverUrl, session.id),
+    ...(session.created_at ? { createdAt: session.created_at } : {}),
+    ...(session.updated_at ? { updatedAt: session.updated_at } : {}),
+  };
 }
 
 const defaultFileLister: FileLister = {
@@ -172,6 +202,18 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
   const handlers: ToolHandlers = {
     async kimi_bridge_status() {
       return deps.preflight.getStatus();
+    },
+
+    async kimi_recent_sessions(input: RecentSessionsInput) {
+      const result = await deps.kimi.listSessions({
+        pageSize: input.pageSize ?? 10,
+        status: input.status,
+        includeArchive: input.includeArchive,
+        excludeEmpty: input.excludeEmpty,
+      });
+      return {
+        items: result.items.map((session) => buildRecentSession(deps.config.serverUrl, session)),
+      };
     },
 
     async kimi_delegate_task(input: DelegateTaskInput) {
@@ -309,5 +351,6 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
     kimi_continue_task: withPreflight(deps.preflight, handlers.kimi_continue_task),
     kimi_get_diff: withPreflight(deps.preflight, handlers.kimi_get_diff),
     kimi_abort: withPreflight(deps.preflight, handlers.kimi_abort),
+    kimi_recent_sessions: withPreflight(deps.preflight, handlers.kimi_recent_sessions),
   };
 }

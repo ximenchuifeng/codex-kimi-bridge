@@ -48,3 +48,23 @@ export interface PendingQuestion {
   question_id: string;
   [key: string]: unknown;
 }
+
+export interface ListSessionsInput {
+  pageSize?: number;
+  status?: string;
+  includeArchive?: boolean;
+  excludeEmpty?: boolean;
+}
+
+export interface RecentSession {
+  sessionId: string;
+  status: WireSession['status'];
+  title: string;
+  webUrl: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface ListSessionsResult {
+  items: Array<WireSession & { created_at?: string; updated_at?: string }>;
+}
