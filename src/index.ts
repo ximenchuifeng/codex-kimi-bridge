@@ -96,6 +96,22 @@ export async function main(): Promise<void> {
   );
 
   server.tool(
+    'kimi_delegate_and_wait',
+    {
+      cwd: z.string(),
+      task: z.string(),
+      acceptanceCriteria: z.array(z.string()),
+      plan: z.array(z.string()),
+      timeoutMs: z.number().optional(),
+      swarmMode: z.boolean().optional(),
+      sessionId: z.string().optional(),
+      model: z.string().optional(),
+      thinking: z.string().optional(),
+    },
+    async (input) => runToolHandler(() => handlers.kimi_delegate_and_wait(input)),
+  );
+
+  server.tool(
     'kimi_wait_until_idle',
     {
       sessionId: z.string(),

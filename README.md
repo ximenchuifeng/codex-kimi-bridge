@@ -154,6 +154,18 @@ Both `kimi_delegate_task` and `kimi_continue_task` return a `webUrl` pointing to
 
 The `sessionId` is URL-encoded, and the link intentionally contains no server token or authentication query parameters. If you have already opened and authenticated with Kimi Web in your browser, you can visit `webUrl` directly. If you have not yet authenticated, the Kimi Web UI will prompt you to authenticate before showing the session.
 
+### One-call delegate and wait
+
+Use `kimi_delegate_and_wait` when you want the bridge to perform the mechanical delegate/wait/handoff sequence in one MCP call. Codex still reviews the returned handoff and decides whether to accept the work or continue the session.
+
+The result includes:
+
+- `sessionId`, `promptId`, `submitStatus`, and `webUrl`
+- `wait`, including `idle`, `timeout`, `awaiting_approval`, or `awaiting_question`
+- `handoff` and `changedFiles` only when `wait.status` is `idle`
+
+If the result is `timeout`, keep the `sessionId` and call `kimi_wait_until_idle` or `kimi_get_handoff` later. If it is blocked, resolve the approval/question in Kimi and continue the same session.
+
 ## Model Resolution
 
 The bridge resolves the Kimi model in this order:

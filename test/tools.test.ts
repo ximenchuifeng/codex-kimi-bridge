@@ -319,4 +319,132 @@ describe('tool handlers', () => {
       questions: [{ question_id: 'q1', questions: [] }],
     });
   });
+
+  it('delegates, waits, and returns a handoff when idle', async () => {
+    const kimi = makeKimi({
+      createSession: vi.fn(async () => ({ id: 's1' })),
+      submitPrompt: vi.fn(async () => ({ prompt_id: 'p1', user_message_id: 'm1', status: 'running' })),
+      getStatus: vi.fn(async () => ({ status: 'idle' })),
+      listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done\n- src/a.ts' }]),
+      getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 4, deletions: 1 })),
+      getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ diff' })),
+      getSession: vi.fn(async () => ({ id: 's1', title: 'test', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 })),
+    });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    const result = await handlers.kimi_delegate_and_wait({
+      cwd: '/repo',
+      task: 'implement x',
+      acceptanceCriteria: ['tests pass'],
+      plan: ['edit src/a.ts'],
+      timeoutMs: 1000,
+    });
+
+    expect(result).toMatchObject({
+      sessionId: 's1',
+      promptId: 'p1',
+      submitStatus: 'running',
+      wait: { status: 'idle' },
+      webUrl: 'http://127.0.0.1:58627/sessions/s1',
+    });
+    expect(result.handoff?.changedFiles).toEqual(['src/a.ts']);
+    expect(result.changedFiles).toEqual(['src/a.ts']);
+  });
+
+  it('returns session details without handoff when delegate_and_wait times out', async () => {
+    const kimi = makeKimi({
+      getStatus: vi.fn(async () => ({ status: 'running' })),
+      listMessages: vi.fn(async () => {
+        throw new Error('handoff should not be loaded');
+      }),
+    });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig({ requestTimeoutMs: 20 }), preflight: makePreflight() });
+
+    const result = await handlers.kimi_delegate_and_wait({
+      cwd: '/repo',
+      task: 'implement x',
+      acceptanceCriteria: ['tests pass'],
+      plan: ['edit code'],
+      timeoutMs: 20,
+    });
+
+    expect(result.wait).toEqual({ status: 'timeout' });
+    expect(result.handoff).toBeUndefined();
+    expect(result.changedFiles).toBeUndefined();
+    expect(result.sessionId).toBe('s1');
+    expect(result.webUrl).toBe('http://127.0.0.1:58627/sessions/s1');
+  });
+
+  it('returns pending approvals when delegate_and_wait is blocked on approval', async () => {
+    const kimi = makeKimi({
+      getStatus: vi.fn(async () => ({ status: 'awaiting_approval' })),
+      listPendingApprovals: vi.fn(async () => [{ approval_id: 'a1', tool_name: 'Bash' }]),
+    });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    const result = await handlers.kimi_delegate_and_wait({
+      cwd: '/repo',
+      task: 'implement x',
+      acceptanceCriteria: ['tests pass'],
+      plan: ['edit code'],
+    });
+
+    expect(result.wait).toEqual({
+      status: 'awaiting_approval',
+      approvals: [{ approval_id: 'a1', tool_name: 'Bash' }],
+    });
+    expect(result.handoff).toBeUndefined();
+  });
+
+  it('returns pending questions when delegate_and_wait is blocked on a question', async () => {
+    const kimi = makeKimi({
+      getStatus: vi.fn(async () => ({ status: 'awaiting_question' })),
+      listPendingQuestions: vi.fn(async () => [{ question_id: 'q1', questions: [] }]),
+    });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    const result = await handlers.kimi_delegate_and_wait({
+      cwd: '/repo',
+      task: 'implement x',
+      acceptanceCriteria: ['tests pass'],
+      plan: ['edit code'],
+    });
+
+    expect(result.wait).toEqual({
+      status: 'awaiting_question',
+      questions: [{ question_id: 'q1', questions: [] }],
+    });
+    expect(result.handoff).toBeUndefined();
+  });
+
+  it('delegate_and_wait reuses an existing session id', async () => {
+    const kimi = makeKimi();
+    const handlers = createToolHandlers({ kimi, config: makeConfig(), preflight: makePreflight() });
+
+    const result = await handlers.kimi_delegate_and_wait({
+      cwd: '/repo',
+      sessionId: 'existing/session 1',
+      task: 'continue x',
+      acceptanceCriteria: ['tests pass'],
+      plan: ['edit code'],
+    });
+
+    expect(kimi.createSession).not.toHaveBeenCalled();
+    expect(result.sessionId).toBe('existing/session 1');
+    expect(result.webUrl).toBe('http://127.0.0.1:58627/sessions/existing%2Fsession%201');
+  });
+
+  it('delegate_and_wait preflights exactly once', async () => {
+    const preflight = makePreflight();
+    const handlers = createToolHandlers({ kimi: makeKimi(), config: makeConfig(), preflight });
+
+    await handlers.kimi_delegate_and_wait({
+      cwd: '/repo',
+      task: 'implement x',
+      acceptanceCriteria: ['tests pass'],
+      plan: ['edit code'],
+    });
+
+    expect(preflight.ensureReady).toHaveBeenCalledTimes(1);
+  });
 });

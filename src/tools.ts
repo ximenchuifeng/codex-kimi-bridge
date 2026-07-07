@@ -30,6 +30,10 @@ export interface DelegateTaskInput {
   thinking?: string;
 }
 
+export interface DelegateAndWaitInput extends DelegateTaskInput {
+  timeoutMs?: number;
+}
+
 export interface WaitUntilIdleInput {
   sessionId: string;
   timeoutMs?: number;
@@ -58,8 +62,19 @@ export interface AbortInput {
   sessionId: string;
 }
 
+export interface DelegateAndWaitResult {
+  sessionId: string;
+  promptId: string;
+  submitStatus: string;
+  webUrl: string;
+  wait: WaitUntilIdleResult;
+  handoff?: KimiHandoff;
+  changedFiles?: string[];
+}
+
 export interface ToolHandlers {
   kimi_delegate_task: (input: DelegateTaskInput) => Promise<{ sessionId: string; promptId: string; status: string; webUrl: string }>;
+  kimi_delegate_and_wait: (input: DelegateAndWaitInput) => Promise<DelegateAndWaitResult>;
   kimi_wait_until_idle: (input: WaitUntilIdleInput) => Promise<WaitUntilIdleResult>;
   kimi_get_handoff: (input: GetHandoffInput) => Promise<KimiHandoff>;
   kimi_continue_task: (input: ContinueTaskInput) => Promise<{ sessionId: string; promptId: string; status: string; webUrl: string }>;
@@ -138,6 +153,33 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
       return { sessionId: session.id, promptId: result.prompt_id, status: result.status, webUrl: buildWebUrl(deps.config.serverUrl, session.id) };
     },
 
+    async kimi_delegate_and_wait(input: DelegateAndWaitInput) {
+      const delegated = await handlers.kimi_delegate_task(input);
+      const wait = await handlers.kimi_wait_until_idle({
+        sessionId: delegated.sessionId,
+        timeoutMs: input.timeoutMs,
+      });
+      if (wait.status !== 'idle') {
+        return {
+          sessionId: delegated.sessionId,
+          promptId: delegated.promptId,
+          submitStatus: delegated.status,
+          webUrl: delegated.webUrl,
+          wait,
+        };
+      }
+      const handoff = await handlers.kimi_get_handoff({ sessionId: delegated.sessionId });
+      return {
+        sessionId: delegated.sessionId,
+        promptId: delegated.promptId,
+        submitStatus: delegated.status,
+        webUrl: delegated.webUrl,
+        wait,
+        handoff,
+        changedFiles: handoff.changedFiles,
+      };
+    },
+
     async kimi_wait_until_idle(input: WaitUntilIdleInput) {
       const result = await waitUntilIdle({
         sessionId: input.sessionId,
@@ -211,6 +253,7 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
   return {
     ...handlers,
     kimi_delegate_task: withPreflight(deps.preflight, handlers.kimi_delegate_task),
+    kimi_delegate_and_wait: withPreflight(deps.preflight, handlers.kimi_delegate_and_wait),
     kimi_wait_until_idle: withPreflight(deps.preflight, handlers.kimi_wait_until_idle),
     kimi_get_handoff: withPreflight(deps.preflight, handlers.kimi_get_handoff),
     kimi_continue_task: withPreflight(deps.preflight, handlers.kimi_continue_task),
