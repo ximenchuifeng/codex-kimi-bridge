@@ -188,7 +188,7 @@ Input fields:
 - `excludeEmpty`: exclude sessions with no messages.
 - `cwd` *(optional)*: when provided, only sessions whose `metadata.cwd` matches this directory are returned. Trailing-slash differences are normalized, so `/repo` and `/repo/` are treated as the same directory.
 - `matchAnyCwd` *(optional)*: when `true`, disables the `cwd` filter and returns title matches from any working directory. Default: `false`.
-- `includeSummary` *(optional)*: when `true`, fetches the last user/assistant message and message count for each returned candidate. Default: `false`. Keep `false` for normal lookups to avoid the extra latency; enable it when recovering from an interruption or deciding whether to reuse a session.
+- `includeSummary` *(optional)*: when `true`, fetches the last user/assistant message and message count for each returned candidate. Default: `false`. Keep `false` for normal lookups to avoid the extra latency; enable it when recovering from an interruption or deciding whether to reuse a session. The summary skips internal reminder messages (for example, `<system-reminder>` and `<plugin_session_start>`) so that `lastUserMessage` and `lastAssistantMessage` reflect the real task context.
 
 The response contains:
 
@@ -200,9 +200,9 @@ The response contains:
 
 When `includeSummary` is `true`, each session in `candidates`, `match`, and `skippedCandidates` may include a `summary` with:
 
-- `messageCount`: total number of messages in the session.
-- `lastUserMessage`: content of the most recent `user` message, truncated to 1000 characters and redacted for tokens.
-- `lastAssistantMessage`: content of the most recent `assistant` message, truncated to 1000 characters and redacted for tokens.
+- `messageCount`: total number of messages in the session. Internal reminder messages are skipped when picking `lastUserMessage` and `lastAssistantMessage`, so those fields reflect the real task context.
+- `lastUserMessage`: content of the most recent non-internal `user` message, truncated to 1000 characters and redacted for tokens. Omitted when there is no non-internal user message.
+- `lastAssistantMessage`: content of the most recent non-internal `assistant` message, truncated to 1000 characters and redacted for tokens. Omitted when there is no non-internal assistant message.
 - `messagesUnavailable`: `true` when message fetching failed.
 - `messageError`: a safe error message when message fetching failed.
 
@@ -254,7 +254,7 @@ Input fields under `dedupe`:
 - `excludeEmpty`: exclude sessions with no messages.
 - `reuseIfStatus`: array of statuses that the caller considers reusable. Default: `["running", "idle", "awaiting_approval", "awaiting_question"]`.
 - `matchAnyCwd` *(optional)*: when `true`, allows reusing a session from any working directory. Default: `false`.
-- `includeSummary` *(optional)*: when `true`, fetches the last user/assistant message and message count for the matched session and any `skippedCandidates`. Default: `false`. Enable it when recovering from an interruption or deciding whether to reuse an old session; keep it `false` for normal calls to avoid extra latency.
+- `includeSummary` *(optional)*: when `true`, fetches the last user/assistant message and message count for the matched session and any `skippedCandidates`. Default: `false`. Enable it when recovering from an interruption or deciding whether to reuse an old session; keep it `false` for normal calls to avoid extra latency. The summary skips internal reminder messages (for example, `<system-reminder>` and `<plugin_session_start>`) so that `lastUserMessage` and `lastAssistantMessage` reflect the real task context.
 
 By default, dedupe only reuses a session if its `metadata.cwd` matches the `cwd` passed to `kimi_delegate_and_wait`. This prevents accidentally reusing a session from a different project or workspace, even when the title matches. Trailing-slash differences are normalized, so `/repo` and `/repo/` are treated as the same directory. Only set `matchAnyCwd: true` when you intentionally want to recover a session from another workspace.
 

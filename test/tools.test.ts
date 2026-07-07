@@ -1880,6 +1880,103 @@ describe('tool handlers', () => {
         lastAssistantMessage: 'only assistant',
       });
     });
+
+    it('skips internal reminder messages when picking lastUserMessage', async () => {
+      const listMessages = vi.fn(async () => [
+        { role: 'user', content: 'real user request' },
+        { role: 'assistant', content: 'ack' },
+        { role: 'user', content: '<system-reminder>\nAuto permission mode is active.\n</system-reminder>' },
+      ]);
+      const listSessions = vi.fn(async () => ({
+        items: [
+          { id: 's1', title: 'Feature X', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+        ],
+      }));
+      const kimi = makeKimi({ listSessions, listMessages });
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+      const result = await handlers.kimi_find_recent_session({ titleContains: 'feature', includeSummary: true });
+
+      expect(result.candidates[0].summary).toEqual({
+        messageCount: 3,
+        lastUserMessage: 'real user request',
+        lastAssistantMessage: 'ack',
+      });
+    });
+
+    it('omits lastUserMessage when all user messages are internal reminders', async () => {
+      const listMessages = vi.fn(async () => [
+        { role: 'user', content: '<plugin_session_start plugin="superpowers">' },
+        { role: 'assistant', content: 'Kimi Code tool mapping for Superpowers skills: ...' },
+        { role: 'user', content: '<system-reminder>\nAuto permission mode is active.\n</system-reminder>' },
+      ]);
+      const listSessions = vi.fn(async () => ({
+        items: [
+          { id: 's1', title: 'Feature X', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+        ],
+      }));
+      const kimi = makeKimi({ listSessions, listMessages });
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+      const result = await handlers.kimi_find_recent_session({ titleContains: 'feature', includeSummary: true });
+
+      expect(result.candidates[0].summary).toEqual({
+        messageCount: 3,
+      });
+      expect(result.candidates[0].summary).not.toHaveProperty('lastUserMessage');
+      expect(result.candidates[0].summary).not.toHaveProperty('lastAssistantMessage');
+    });
+
+    it('skips empty assistant messages when picking lastAssistantMessage', async () => {
+      const listMessages = vi.fn(async () => [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: '' },
+        { role: 'assistant', content: '   ' },
+        { role: 'assistant', content: '<system-reminder>internal</system-reminder>' },
+      ]);
+      const listSessions = vi.fn(async () => ({
+        items: [
+          { id: 's1', title: 'Feature X', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+        ],
+      }));
+      const kimi = makeKimi({ listSessions, listMessages });
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+      const result = await handlers.kimi_find_recent_session({ titleContains: 'feature', includeSummary: true });
+
+      expect(result.candidates[0].summary).toEqual({
+        messageCount: 4,
+        lastUserMessage: 'hello',
+      });
+      expect(result.candidates[0].summary).not.toHaveProperty('lastAssistantMessage');
+    });
+
+    it('keeps redacting token-like values after filtering internal reminders', async () => {
+      const listMessages = vi.fn(async () => [
+        { role: 'user', content: 'open http://127.0.0.1:58627/#token=url-secret and use config-secret' },
+        { role: 'user', content: '<system-reminder>\nAuto permission mode is active.\n</system-reminder>' },
+      ]);
+      const listSessions = vi.fn(async () => ({
+        items: [
+          { id: 's1', title: 'Feature X', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+        ],
+      }));
+      const kimi = makeKimi({ listSessions, listMessages });
+      const handlers = createToolHandlers({
+        kimi: kimi as never,
+        config: makeConfig({ serverToken: 'config-secret' }),
+        preflight: makePreflight(),
+      });
+
+      const result = await handlers.kimi_find_recent_session({ titleContains: 'feature', includeSummary: true });
+
+      const summary = result.candidates[0].summary;
+      expect(summary?.messageCount).toBe(2);
+      expect(summary?.lastUserMessage).toContain('#token=[redacted]');
+      expect(summary?.lastUserMessage).toContain('use [redacted]');
+      expect(JSON.stringify(result)).not.toContain('url-secret');
+      expect(JSON.stringify(result)).not.toContain('config-secret');
+    });
   });
 
   describe('includeSummary in dedupe', () => {

@@ -274,6 +274,16 @@ function sanitizeDiagnosticText(value: string, token: string | undefined): strin
   return redactToken(sanitizeSessionTitle(value), token);
 }
 
+function isInternalSummaryMessage(content: string): boolean {
+  const trimmed = content.trim();
+  return (
+    trimmed.startsWith('<system-reminder>') ||
+    trimmed.includes('<plugin_session_start') ||
+    trimmed.includes('Kimi Code tool mapping for Superpowers skills') ||
+    trimmed.includes('Auto permission mode is active')
+  );
+}
+
 async function buildRecentSessionSummary(
   kimi: KimiClient,
   sessionId: string,
@@ -286,10 +296,16 @@ async function buildRecentSessionSummary(
     for (let i = messages.length - 1; i >= 0; i--) {
       const message = messages[i];
       if (lastUserMessage === undefined && message.role === 'user') {
-        lastUserMessage = truncateMessage(sanitizeDiagnosticText(message.content, serverToken));
+        const sanitized = sanitizeDiagnosticText(message.content, serverToken).trim();
+        if (!isInternalSummaryMessage(message.content) && sanitized.length > 0) {
+          lastUserMessage = truncateMessage(sanitized);
+        }
       }
       if (lastAssistantMessage === undefined && message.role === 'assistant') {
-        lastAssistantMessage = truncateMessage(sanitizeDiagnosticText(message.content, serverToken));
+        const sanitized = sanitizeDiagnosticText(message.content, serverToken).trim();
+        if (!isInternalSummaryMessage(message.content) && sanitized.length > 0) {
+          lastAssistantMessage = truncateMessage(sanitized);
+        }
       }
       if (lastUserMessage !== undefined && lastAssistantMessage !== undefined) {
         break;
