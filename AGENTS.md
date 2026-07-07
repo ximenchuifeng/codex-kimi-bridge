@@ -126,7 +126,7 @@ If a previous `kimi_delegate_and_wait` was interrupted (for example, by pressing
 }
 ```
 
-When `dedupe` finds a reusable session, the bridge returns the existing session information instead of creating a duplicate. Use the returned `status`, `webUrl`, and `suggestedNextActions` to decide whether to wait, review, or resolve a block.
+When recovering from an interruption or deciding whether to reuse an old session, set `includeSummary: true` on `kimi_find_recent_session` or on `kimi_delegate_and_wait.dedupe` to see the last user/assistant message and message count. Leave it `false` by default to avoid the extra message fetch.
 
 `dedupe` only reuses sessions in `running`, `idle`, `awaiting_approval`, or `awaiting_question` status. It never automatically reuses an `aborted` session. If the matched session is `aborted`, inspect the `webUrl` and use `kimi_continue_task` to resume it manually; do not expect `kimi_delegate_and_wait` to resume it automatically.
 

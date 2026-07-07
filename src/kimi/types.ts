@@ -56,6 +56,14 @@ export interface ListSessionsInput {
   excludeEmpty?: boolean;
 }
 
+export interface RecentSessionSummary {
+  lastUserMessage?: string;
+  lastAssistantMessage?: string;
+  messageCount?: number;
+  messagesUnavailable?: boolean;
+  messageError?: string;
+}
+
 export interface RecentSession {
   sessionId: string;
   status: WireSession['status'];
@@ -64,6 +72,7 @@ export interface RecentSession {
   cwd?: string;
   createdAt?: string;
   updatedAt?: string;
+  summary?: RecentSessionSummary;
 }
 
 export interface ListSessionsResult {

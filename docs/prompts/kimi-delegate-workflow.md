@@ -113,7 +113,8 @@ When calling `kimi_delegate_and_wait`, include a stable `titleContains` substrin
     "titleContains": "<unique stable substring from the task title>",
     "status": "<optional status filter>",
     "pageSize": 20,
-    "reuseIfStatus": ["running", "idle", "awaiting_approval", "awaiting_question"]
+    "reuseIfStatus": ["running", "idle", "awaiting_approval", "awaiting_question"],
+    "includeSummary": true
   }
 }
 ```
@@ -125,3 +126,4 @@ Guidelines:
 - When `dedupe` returns an existing session, follow `suggestedNextActions` instead of immediately calling `kimi_delegate_task` again.
 - `dedupe` only reuses `running`, `idle`, `awaiting_approval`, and `awaiting_question` sessions. For `aborted` sessions, inspect the `webUrl` and use `kimi_continue_task`.
 - By default, `dedupe` only reuses sessions whose `metadata.cwd` matches the `cwd` you pass in. This prevents accidentally reusing a session from a different project or workspace. Only add `matchAnyCwd: true` when you intentionally want to recover a session from another workspace; for daily use, leave it out.
+- Add `includeSummary: true` when recovering from an interruption or deciding whether to reuse an old session; it returns the last user/assistant message and message count for the matched session and any skipped candidates. Leave it out for normal calls to avoid the extra message fetch.

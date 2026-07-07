@@ -1740,4 +1740,220 @@ describe('tool handlers', () => {
       expect(result.candidates[0].cwd).toBe('/repo/#token=[redacted] [redacted]');
     });
   });
+
+  describe('includeSummary in find_recent_session', () => {
+    it('does not call listMessages by default', async () => {
+      const listMessages = vi.fn(async () => []);
+      const listSessions = vi.fn(async () => ({
+        items: [
+          { id: 's1', title: 'Feature X', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+        ],
+      }));
+      const kimi = makeKimi({ listSessions, listMessages });
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+      const result = await handlers.kimi_find_recent_session({ titleContains: 'feature' });
+
+      expect(result.match?.summary).toBeUndefined();
+      expect(result.candidates[0].summary).toBeUndefined();
+      expect(listMessages).not.toHaveBeenCalled();
+    });
+
+    it('returns summary with messageCount and last messages when includeSummary is true', async () => {
+      const listMessages = vi.fn(async () => [
+        { role: 'user', content: 'first user message' },
+        { role: 'assistant', content: 'first assistant message' },
+        { role: 'user', content: 'last user message' },
+        { role: 'assistant', content: 'last assistant message' },
+      ]);
+      const listSessions = vi.fn(async () => ({
+        items: [
+          { id: 's1', title: 'Feature X', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+        ],
+      }));
+      const kimi = makeKimi({ listSessions, listMessages });
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+      const result = await handlers.kimi_find_recent_session({ titleContains: 'feature', includeSummary: true });
+
+      expect(listMessages).toHaveBeenCalledTimes(1);
+      expect(listMessages).toHaveBeenCalledWith('s1');
+      expect(result.candidates[0].summary).toEqual({
+        messageCount: 4,
+        lastUserMessage: 'last user message',
+        lastAssistantMessage: 'last assistant message',
+      });
+      expect(result.match?.summary).toBe(result.candidates[0].summary);
+      expect(result.query.includeSummary).toBe(true);
+    });
+
+    it('returns summary for skippedCandidates when cwd mismatches', async () => {
+      const listMessages = vi.fn(async () => [
+        { role: 'assistant', content: 'skipped assistant' },
+        { role: 'user', content: 'skipped user' },
+      ]);
+      const listSessions = vi.fn(async () => ({
+        items: [
+          { id: 's1', title: 'Feature X', status: 'idle', metadata: { cwd: '/other' }, agent_config: {}, last_seq: 0 },
+        ],
+      }));
+      const kimi = makeKimi({ listSessions, listMessages });
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+      const result = await handlers.kimi_find_recent_session({ titleContains: 'feature', cwd: '/repo', includeSummary: true });
+
+      expect(result.candidates).toHaveLength(0);
+      expect(result.skippedCandidates).toHaveLength(1);
+      expect(result.skippedCandidates?.[0].summary).toEqual({
+        messageCount: 2,
+        lastUserMessage: 'skipped user',
+        lastAssistantMessage: 'skipped assistant',
+      });
+      expect(listMessages).toHaveBeenCalledTimes(1);
+    });
+
+    it('marks messagesUnavailable and keeps the main flow when listMessages fails', async () => {
+      const listMessages = vi.fn(async () => {
+        throw new Error('network error with secret-token');
+      });
+      const listSessions = vi.fn(async () => ({
+        items: [
+          { id: 's1', title: 'Feature X', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+        ],
+      }));
+      const kimi = makeKimi({ listSessions, listMessages });
+      const handlers = createToolHandlers({
+        kimi: kimi as never,
+        config: makeConfig({ serverToken: 'secret-token' }),
+        preflight: makePreflight(),
+      });
+
+      const result = await handlers.kimi_find_recent_session({ titleContains: 'feature', includeSummary: true });
+
+      expect(result.match?.sessionId).toBe('s1');
+      expect(result.match?.summary?.messagesUnavailable).toBe(true);
+      expect(result.match?.summary?.messageError).toMatch(/network error/);
+      expect(JSON.stringify(result)).not.toContain('secret-token');
+    });
+
+    it('redacts token-like content and serverToken in summaries', async () => {
+      const listMessages = vi.fn(async () => [
+        { role: 'user', content: 'open http://127.0.0.1:58627/#token=url-secret and use config-secret' },
+      ]);
+      const listSessions = vi.fn(async () => ({
+        items: [
+          { id: 's1', title: 'Feature X', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+        ],
+      }));
+      const kimi = makeKimi({ listSessions, listMessages });
+      const handlers = createToolHandlers({
+        kimi: kimi as never,
+        config: makeConfig({ serverToken: 'config-secret' }),
+        preflight: makePreflight(),
+      });
+
+      const result = await handlers.kimi_find_recent_session({ titleContains: 'feature', includeSummary: true });
+
+      const summary = result.candidates[0].summary;
+      expect(summary?.lastUserMessage).toContain('#token=[redacted]');
+      expect(summary?.lastUserMessage).toContain('use [redacted]');
+      expect(JSON.stringify(result)).not.toContain('url-secret');
+      expect(JSON.stringify(result)).not.toContain('config-secret');
+    });
+
+    it('handles assistant-only and user-only message lists', async () => {
+      const listMessages = vi.fn(async () => [
+        { role: 'assistant', content: 'only assistant' },
+      ]);
+      const listSessions = vi.fn(async () => ({
+        items: [
+          { id: 's1', title: 'Feature X', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+        ],
+      }));
+      const kimi = makeKimi({ listSessions, listMessages });
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+      const result = await handlers.kimi_find_recent_session({ titleContains: 'feature', includeSummary: true });
+
+      expect(result.candidates[0].summary).toEqual({
+        messageCount: 1,
+        lastAssistantMessage: 'only assistant',
+      });
+    });
+  });
+
+  describe('includeSummary in dedupe', () => {
+    it('includes summary on matched session when reusing', async () => {
+      const listSessions = vi.fn(async () => ({
+        items: [{ id: 's2', title: 'Feature X', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 }],
+      }));
+      const listMessages = vi.fn(async () => [
+        { role: 'user', content: 'plan' },
+        { role: 'assistant', content: 'done' },
+      ]);
+      const kimi = makeKimi({
+        listSessions,
+        listMessages,
+        getStatus: vi.fn(async () => ({ status: 'idle' })),
+        getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 })),
+        getFileDiff: vi.fn(async () => ({ path: 'src/a.ts', diff: '@@ diff' })),
+        getSession: vi.fn(async () => ({ id: 's2', title: 'Feature X', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 })),
+      });
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+      const result = await handlers.kimi_delegate_and_wait({
+        cwd: '/repo',
+        task: 'implement x',
+        acceptanceCriteria: ['tests pass'],
+        plan: ['edit code'],
+        dedupe: { titleContains: 'feature', includeSummary: true },
+      });
+
+      expect(result.dedupe?.reused).toBe(true);
+      expect(result.dedupe?.match?.summary).toEqual({
+        messageCount: 2,
+        lastUserMessage: 'plan',
+        lastAssistantMessage: 'done',
+      });
+      expect(listMessages).toHaveBeenCalledWith('s2');
+    });
+
+    it('includes summary on skippedCandidates when cwd mismatches', async () => {
+      const createSession = vi.fn(async () => ({ id: 's1' }));
+      const submitPrompt = vi.fn(async () => ({ prompt_id: 'p1', user_message_id: 'm1', status: 'running' }));
+      const listSessions = vi.fn(async () => ({
+        items: [{ id: 's2', title: 'Feature X', status: 'idle', metadata: { cwd: '/other' }, agent_config: {}, last_seq: 0 }],
+      }));
+      const listMessages = vi.fn(async () => [
+        { role: 'assistant', content: 'other cwd' },
+      ]);
+      const kimi = makeKimi({
+        createSession,
+        submitPrompt,
+        listSessions,
+        listMessages,
+        getStatus: vi.fn(async () => ({ status: 'idle' })),
+        getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 })),
+        getFileDiff: vi.fn(async () => ({ path: 'src/a.ts', diff: '@@ diff' })),
+        getSession: vi.fn(async () => ({ id: 's1', title: 'test', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 })),
+      });
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+      const result = await handlers.kimi_delegate_and_wait({
+        cwd: '/repo',
+        task: 'implement x',
+        acceptanceCriteria: ['tests pass'],
+        plan: ['edit code'],
+        dedupe: { titleContains: 'feature', includeSummary: true },
+      });
+
+      expect(result.dedupe?.reused).toBe(false);
+      expect(result.dedupe?.reason).toBe('cwd_mismatch');
+      expect(result.dedupe?.skippedCandidates?.[0].summary).toEqual({
+        messageCount: 1,
+        lastAssistantMessage: 'other cwd',
+      });
+      expect(listMessages).toHaveBeenCalledWith('s2');
+    });
+  });
 });

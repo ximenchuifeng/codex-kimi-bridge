@@ -188,6 +188,7 @@ Input fields:
 - `excludeEmpty`: exclude sessions with no messages.
 - `cwd` *(optional)*: when provided, only sessions whose `metadata.cwd` matches this directory are returned. Trailing-slash differences are normalized, so `/repo` and `/repo/` are treated as the same directory.
 - `matchAnyCwd` *(optional)*: when `true`, disables the `cwd` filter and returns title matches from any working directory. Default: `false`.
+- `includeSummary` *(optional)*: when `true`, fetches the last user/assistant message and message count for each returned candidate. Default: `false`. Keep `false` for normal lookups to avoid the extra latency; enable it when recovering from an interruption or deciding whether to reuse a session.
 
 The response contains:
 
@@ -196,6 +197,14 @@ The response contains:
 - `candidates`: all matching sessions, in the order returned by the Kimi server. If `cwd` is provided and `matchAnyCwd` is not `true`, this list only includes sessions from the same `cwd`.
 - `skippedCandidates` *(optional)*: sessions whose title matched but whose `cwd` did not match. Only present when `cwd` is provided, `matchAnyCwd` is not `true`, and at least one title match was excluded for this reason.
 - `suggestedNextActions`: guidance based on the matched session status, or suggestions to widen the keyword or call `kimi_recent_sessions` when nothing matches.
+
+When `includeSummary` is `true`, each session in `candidates`, `match`, and `skippedCandidates` may include a `summary` with:
+
+- `messageCount`: total number of messages in the session.
+- `lastUserMessage`: content of the most recent `user` message, truncated to 1000 characters and redacted for tokens.
+- `lastAssistantMessage`: content of the most recent `assistant` message, truncated to 1000 characters and redacted for tokens.
+- `messagesUnavailable`: `true` when message fetching failed.
+- `messageError`: a safe error message when message fetching failed.
 
 Status-based guidance:
 
@@ -245,6 +254,7 @@ Input fields under `dedupe`:
 - `excludeEmpty`: exclude sessions with no messages.
 - `reuseIfStatus`: array of statuses that the caller considers reusable. Default: `["running", "idle", "awaiting_approval", "awaiting_question"]`.
 - `matchAnyCwd` *(optional)*: when `true`, allows reusing a session from any working directory. Default: `false`.
+- `includeSummary` *(optional)*: when `true`, fetches the last user/assistant message and message count for the matched session and any `skippedCandidates`. Default: `false`. Enable it when recovering from an interruption or deciding whether to reuse an old session; keep it `false` for normal calls to avoid extra latency.
 
 By default, dedupe only reuses a session if its `metadata.cwd` matches the `cwd` passed to `kimi_delegate_and_wait`. This prevents accidentally reusing a session from a different project or workspace, even when the title matches. Trailing-slash differences are normalized, so `/repo` and `/repo/` are treated as the same directory. Only set `matchAnyCwd: true` when you intentionally want to recover a session from another workspace.
 

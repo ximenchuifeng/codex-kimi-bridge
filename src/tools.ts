@@ -4,7 +4,7 @@ import type { KimiHandoff } from './handoff.js';
 import type { KimiClient } from './kimi/client.js';
 import { waitUntilIdle, type WaitUntilIdleResult } from './kimi/wait.js';
 import { buildHandoff, expandGitStatusEntries } from './handoff.js';
-import type { ListSessionsInput, RecentSession, WireSession } from './kimi/types.js';
+import type { ListSessionsInput, RecentSession, RecentSessionSummary, WireSession } from './kimi/types.js';
 import type { BridgeStatus, KimiPreflight } from './preflight.js';
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
@@ -44,6 +44,7 @@ export interface DelegateAndWaitDedupeInput {
   excludeEmpty?: boolean;
   reuseIfStatus?: string[];
   matchAnyCwd?: boolean;
+  includeSummary?: boolean;
 }
 
 export interface WaitUntilIdleInput {
@@ -93,6 +94,7 @@ export interface FindRecentSessionInput {
   excludeEmpty?: boolean;
   cwd?: string;
   matchAnyCwd?: boolean;
+  includeSummary?: boolean;
 }
 
 export interface FindRecentSessionResult {
@@ -272,6 +274,41 @@ function sanitizeDiagnosticText(value: string, token: string | undefined): strin
   return redactToken(sanitizeSessionTitle(value), token);
 }
 
+async function buildRecentSessionSummary(
+  kimi: KimiClient,
+  sessionId: string,
+  serverToken: string | undefined,
+): Promise<RecentSessionSummary> {
+  try {
+    const messages = await kimi.listMessages(sessionId);
+    let lastUserMessage: string | undefined;
+    let lastAssistantMessage: string | undefined;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i];
+      if (lastUserMessage === undefined && message.role === 'user') {
+        lastUserMessage = truncateMessage(sanitizeDiagnosticText(message.content, serverToken));
+      }
+      if (lastAssistantMessage === undefined && message.role === 'assistant') {
+        lastAssistantMessage = truncateMessage(sanitizeDiagnosticText(message.content, serverToken));
+      }
+      if (lastUserMessage !== undefined && lastAssistantMessage !== undefined) {
+        break;
+      }
+    }
+    return {
+      messageCount: messages.length,
+      ...(lastUserMessage !== undefined ? { lastUserMessage } : {}),
+      ...(lastAssistantMessage !== undefined ? { lastAssistantMessage } : {}),
+    };
+  } catch (err) {
+    const rawError = err instanceof Error ? err.message : String(err);
+    return {
+      messagesUnavailable: true,
+      messageError: sanitizeDiagnosticText(rawError, serverToken),
+    };
+  }
+}
+
 interface FindRecentSessionByTitleResult {
   query: FindRecentSessionResult['query'];
   candidates: RecentSession[];
@@ -317,6 +354,18 @@ async function findRecentSessionByTitle(
 
   const candidates = candidateSessions.map((session) => buildRecentSession(deps.config.serverUrl, session, deps.config.serverToken));
   const skippedCandidates = skippedSessions?.map((session) => buildRecentSession(deps.config.serverUrl, session, deps.config.serverToken));
+
+  if (input.includeSummary) {
+    for (const candidate of candidates) {
+      candidate.summary = await buildRecentSessionSummary(deps.kimi, candidate.sessionId, deps.config.serverToken);
+    }
+    if (skippedCandidates) {
+      for (const candidate of skippedCandidates) {
+        candidate.summary = await buildRecentSessionSummary(deps.kimi, candidate.sessionId, deps.config.serverToken);
+      }
+    }
+  }
+
   const match = candidates[0];
 
   const suggestedNextActions = match
@@ -336,6 +385,7 @@ async function findRecentSessionByTitle(
       ...(input.excludeEmpty !== undefined ? { excludeEmpty: input.excludeEmpty } : {}),
       ...(input.cwd !== undefined ? { cwd: sanitizeDiagnosticText(input.cwd, deps.config.serverToken) } : {}),
       ...(input.matchAnyCwd !== undefined ? { matchAnyCwd: input.matchAnyCwd } : {}),
+      ...(input.includeSummary !== undefined ? { includeSummary: input.includeSummary } : {}),
     },
     candidates,
     ...(skippedCandidates && skippedCandidates.length > 0 ? { skippedCandidates } : {}),
@@ -528,6 +578,7 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
           excludeEmpty: dedupeInput.excludeEmpty,
           cwd: input.cwd,
           matchAnyCwd: dedupeInput.matchAnyCwd,
+          includeSummary: dedupeInput.includeSummary,
         });
 
         const reuseIfStatus = dedupeInput.reuseIfStatus ?? defaultReusableStatuses;
