@@ -87,6 +87,15 @@ export interface DelegateAndWaitResult {
   handoff?: KimiHandoff;
   changedFiles?: string[];
   reviewPackage?: ReviewPackageResult;
+  diagnostics?: DelegateAndWaitDiagnostics;
+}
+
+export interface DelegateAndWaitDiagnostics {
+  recentMessages: Array<{ role: string; content: string }>;
+  lastAssistantMessage: string;
+  suggestedNextActions: string[];
+  messagesUnavailable?: boolean;
+  messageError?: string;
 }
 
 export interface ReviewPackageResult {
@@ -156,6 +165,74 @@ function buildRecentSession(serverUrl: string, session: WireSession & { created_
     webUrl: buildWebUrl(serverUrl, session.id),
     ...(session.created_at ? { createdAt: session.created_at } : {}),
     ...(session.updated_at ? { updatedAt: session.updated_at } : {}),
+  };
+}
+
+const MESSAGE_TRUNCATION_LIMIT = 1000;
+
+function truncateMessage(content: string): string {
+  if (content.length <= MESSAGE_TRUNCATION_LIMIT) return content;
+  return `${content.slice(0, MESSAGE_TRUNCATION_LIMIT)}...`;
+}
+
+function redactToken(value: string, token: string | undefined): string {
+  if (!token || token.length === 0) return value;
+  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return value.replace(new RegExp(escaped, 'g'), '[redacted]');
+}
+
+function sanitizeDiagnosticText(value: string, token: string | undefined): string {
+  return redactToken(sanitizeSessionTitle(value), token);
+}
+
+async function buildDelegateAndWaitDiagnostics(
+  kimi: KimiClient,
+  sessionId: string,
+  status: 'timeout' | 'aborted',
+  webUrl: string,
+  serverToken: string | undefined,
+): Promise<DelegateAndWaitDiagnostics> {
+  let recentMessages: Array<{ role: string; content: string }> = [];
+  let lastAssistantMessage = '';
+  let messagesUnavailable = false;
+  let messageError: string | undefined;
+
+  try {
+    const allMessages = await kimi.listMessages(sessionId);
+    recentMessages = allMessages.slice(-3).map((message) => ({
+      role: message.role,
+      content: truncateMessage(sanitizeDiagnosticText(message.content, serverToken)),
+    }));
+    for (let i = recentMessages.length - 1; i >= 0; i--) {
+      if (recentMessages[i].role === 'assistant') {
+        lastAssistantMessage = recentMessages[i].content;
+        break;
+      }
+    }
+  } catch (err) {
+    messagesUnavailable = true;
+    const rawError = err instanceof Error ? err.message : String(err);
+    messageError = sanitizeDiagnosticText(rawError, serverToken);
+  }
+
+  const suggestedNextActions =
+    status === 'timeout'
+      ? [
+          'wait 状态为 timeout，可继续调用 kimi_wait_until_idle 等待同一 session。',
+          `或在浏览器中打开 webUrl ${webUrl} 查看实时进度。`,
+        ]
+      : [
+          'wait 状态为 aborted，可在浏览器中打开 webUrl 查看中断原因。',
+          `webUrl: ${webUrl}`,
+          '必要时使用 kimi_continue_task 重试或补充指令。',
+        ];
+
+  return {
+    recentMessages,
+    lastAssistantMessage,
+    suggestedNextActions,
+    ...(messagesUnavailable ? { messagesUnavailable } : {}),
+    ...(messageError ? { messageError } : {}),
   };
 }
 
@@ -244,13 +321,23 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
         timeoutMs: input.timeoutMs,
       });
       if (wait.status !== 'idle') {
-        return {
+        const result: DelegateAndWaitResult = {
           sessionId: delegated.sessionId,
           promptId: delegated.promptId,
           submitStatus: delegated.status,
           webUrl: delegated.webUrl,
           wait,
         };
+        if (wait.status === 'timeout' || wait.status === 'aborted') {
+          result.diagnostics = await buildDelegateAndWaitDiagnostics(
+            deps.kimi,
+            delegated.sessionId,
+            wait.status,
+            delegated.webUrl,
+            deps.config.serverToken,
+          );
+        }
+        return result;
       }
       const handoff = await handlers.kimi_get_handoff({ sessionId: delegated.sessionId });
       const reviewPackage = buildReviewPackage(delegated.sessionId, handoff);

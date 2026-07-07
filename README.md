@@ -184,8 +184,19 @@ The result includes:
 - `wait`, including `idle`, `timeout`, `awaiting_approval`, or `awaiting_question`
 - `handoff` and `changedFiles` only when `wait.status` is `idle`
 - `reviewPackage` only when `wait.status` is `idle`, with the same structure as `kimi_review_package`
+- `diagnostics` only when `wait.status` is `timeout` or `aborted`
 
 When `wait.status` is `idle`, the returned `reviewPackage` is ready for Codex review immediately. It contains `sessionId`, `webUrl`, `handoff`, `changedFiles`, `diffStats`, and `reviewChecklist`, and it shares the same `handoff` object as the top-level `handoff` field. Codex should prefer using this embedded review package for the first review so that diff content is not lost before a separate `kimi_review_package` call.
+
+If the result is `timeout`, `diagnostics` contains:
+
+- `recentMessages`: up to 3 recent messages with role and content (content truncated to 1000 characters)
+- `lastAssistantMessage`: the content of the most recent assistant message, or an empty string
+- `suggestedNextActions`: guidance to call `kimi_wait_until_idle` or open `webUrl` in the browser
+
+If the result is `aborted`, `diagnostics` contains the same fields, with `suggestedNextActions` recommending opening `webUrl` to inspect the abort reason and using `kimi_continue_task` to retry or add instructions.
+
+If the server cannot fetch messages for diagnostics, `recentMessages` is empty, `messagesUnavailable` is `true`, and `messageError` contains a safe error message with no token values. `suggestedNextActions` is still returned.
 
 If the result is `timeout`, keep the `sessionId` and call `kimi_wait_until_idle` or `kimi_get_handoff` later. If it is blocked, resolve the approval/question in Kimi and continue the same session. Non-`idle` results do not include `handoff` or `reviewPackage`.
 

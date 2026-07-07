@@ -430,6 +430,220 @@ describe('tool handlers', () => {
     expect(result.webUrl).toBe('http://127.0.0.1:58627/sessions/s1');
   });
 
+  it('returns diagnostics for timeout status', async () => {
+    const kimi = makeKimi({
+      getStatus: vi.fn(async () => ({ status: 'running' })),
+      listMessages: vi.fn(async () => [{ role: 'assistant', content: 'still working' }]),
+    });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig({ requestTimeoutMs: 20 }), preflight: makePreflight() });
+
+    const result = await handlers.kimi_delegate_and_wait({
+      cwd: '/repo',
+      task: 'implement x',
+      acceptanceCriteria: ['tests pass'],
+      plan: ['edit code'],
+      timeoutMs: 20,
+    });
+
+    expect(result.wait).toEqual({ status: 'timeout' });
+    expect(result.diagnostics).toBeDefined();
+    expect(result.diagnostics?.recentMessages).toEqual([{ role: 'assistant', content: 'still working' }]);
+    expect(result.diagnostics?.lastAssistantMessage).toBe('still working');
+    expect(result.diagnostics?.suggestedNextActions).toEqual(expect.arrayContaining([expect.stringContaining('kimi_wait_until_idle')]));
+    expect(result.diagnostics?.suggestedNextActions).toEqual(expect.arrayContaining([expect.stringContaining('webUrl')]));
+  });
+
+  it('returns diagnostics for aborted status', async () => {
+    const kimi = makeKimi({
+      getStatus: vi.fn(async () => ({ status: 'aborted' })),
+      listMessages: vi.fn(async () => [{ role: 'assistant', content: 'aborted message' }]),
+    });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    const result = await handlers.kimi_delegate_and_wait({
+      cwd: '/repo',
+      task: 'implement x',
+      acceptanceCriteria: ['tests pass'],
+      plan: ['edit code'],
+    });
+
+    expect(result.wait).toEqual({ status: 'aborted' });
+    expect(result.diagnostics).toBeDefined();
+    expect(result.diagnostics?.recentMessages).toEqual([{ role: 'assistant', content: 'aborted message' }]);
+    expect(result.diagnostics?.lastAssistantMessage).toBe('aborted message');
+    expect(result.diagnostics?.suggestedNextActions).toEqual(expect.arrayContaining([expect.stringContaining('webUrl')]));
+    expect(result.diagnostics?.suggestedNextActions).toEqual(expect.arrayContaining([expect.stringContaining('kimi_continue_task')]));
+  });
+
+  it('diagnostics recentMessages contains at most 3 messages with truncated content', async () => {
+    const longContent = 'x'.repeat(2000);
+    const messages = [
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: 'second' },
+      { role: 'user', content: 'third' },
+      { role: 'assistant', content: 'fourth' },
+      { role: 'assistant', content: longContent },
+    ];
+    const kimi = makeKimi({
+      getStatus: vi.fn(async () => ({ status: 'timeout' })),
+      listMessages: vi.fn(async () => messages),
+    });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    const result = await handlers.kimi_delegate_and_wait({
+      cwd: '/repo',
+      task: 'implement x',
+      acceptanceCriteria: ['tests pass'],
+      plan: ['edit code'],
+    });
+
+    expect(result.diagnostics?.recentMessages).toHaveLength(3);
+    expect(result.diagnostics?.recentMessages[0]).toEqual({ role: 'user', content: 'third' });
+    expect(result.diagnostics?.recentMessages[1]).toEqual({ role: 'assistant', content: 'fourth' });
+    expect(result.diagnostics?.recentMessages[2]).toEqual({ role: 'assistant', content: 'x'.repeat(1000) + '...' });
+  });
+
+  it('diagnostics redacts token-like values in recentMessages', async () => {
+    const kimi = makeKimi({
+      getStatus: vi.fn(async () => ({ status: 'timeout' })),
+      listMessages: vi.fn(async () => [
+        { role: 'assistant', content: 'open http://127.0.0.1:58627/#token=url-secret and use config-secret' },
+      ]),
+    });
+    const handlers = createToolHandlers({
+      kimi: kimi as never,
+      config: makeConfig({ serverToken: 'config-secret' }),
+      preflight: makePreflight(),
+    });
+
+    const result = await handlers.kimi_delegate_and_wait({
+      cwd: '/repo',
+      task: 'implement x',
+      acceptanceCriteria: ['tests pass'],
+      plan: ['edit code'],
+    });
+
+    expect(JSON.stringify(result.diagnostics)).not.toContain('url-secret');
+    expect(JSON.stringify(result.diagnostics)).not.toContain('config-secret');
+    expect(result.diagnostics?.recentMessages[0].content).toContain('#token=[redacted]');
+    expect(result.diagnostics?.recentMessages[0].content).toContain('use [redacted]');
+  });
+
+  it('diagnostics lastAssistantMessage picks the last assistant message', async () => {
+    const kimi = makeKimi({
+      getStatus: vi.fn(async () => ({ status: 'timeout' })),
+      listMessages: vi.fn(async () => [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'first reply' },
+        { role: 'user', content: 'follow up' },
+        { role: 'assistant', content: 'last reply' },
+      ]),
+    });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    const result = await handlers.kimi_delegate_and_wait({
+      cwd: '/repo',
+      task: 'implement x',
+      acceptanceCriteria: ['tests pass'],
+      plan: ['edit code'],
+    });
+
+    expect(result.diagnostics?.lastAssistantMessage).toBe('last reply');
+  });
+
+  it('diagnostics lastAssistantMessage is empty when no assistant message exists', async () => {
+    const kimi = makeKimi({
+      getStatus: vi.fn(async () => ({ status: 'timeout' })),
+      listMessages: vi.fn(async () => [{ role: 'user', content: 'hello' }]),
+    });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    const result = await handlers.kimi_delegate_and_wait({
+      cwd: '/repo',
+      task: 'implement x',
+      acceptanceCriteria: ['tests pass'],
+      plan: ['edit code'],
+    });
+
+    expect(result.diagnostics?.lastAssistantMessage).toBe('');
+  });
+
+  it('diagnostics includes messagesUnavailable when listMessages fails', async () => {
+    const kimi = makeKimi({
+      getStatus: vi.fn(async () => ({ status: 'timeout' })),
+      listMessages: vi.fn(async () => {
+        throw new Error('network error with secret-token and http://127.0.0.1:58627/?token=url-secret');
+      }),
+    });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig({ serverToken: 'secret-token' }), preflight: makePreflight() });
+
+    const result = await handlers.kimi_delegate_and_wait({
+      cwd: '/repo',
+      task: 'implement x',
+      acceptanceCriteria: ['tests pass'],
+      plan: ['edit code'],
+    });
+
+    expect(result.diagnostics).toBeDefined();
+    expect(result.diagnostics?.recentMessages).toEqual([]);
+    expect(result.diagnostics?.messagesUnavailable).toBe(true);
+    expect(result.diagnostics?.messageError).toMatch(/network error/);
+    expect(JSON.stringify(result.diagnostics)).not.toContain('secret-token');
+    expect(JSON.stringify(result.diagnostics)).not.toContain('url-secret');
+    expect(result.diagnostics?.suggestedNextActions.length).toBeGreaterThan(0);
+  });
+
+  it('timeout and aborted do not load handoff, diff, or reviewPackage', async () => {
+    const getGitStatus = vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 }));
+    const getFileDiff = vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ diff' }));
+    const getSession = vi.fn(async () => ({ id: 's1', title: 'test', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 }));
+    const kimi = makeKimi({
+      getStatus: vi.fn(async () => ({ status: 'aborted' })),
+      listMessages: vi.fn(async () => [{ role: 'assistant', content: 'aborted' }]),
+      getGitStatus,
+      getFileDiff,
+      getSession,
+    });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    const result = await handlers.kimi_delegate_and_wait({
+      cwd: '/repo',
+      task: 'implement x',
+      acceptanceCriteria: ['tests pass'],
+      plan: ['edit code'],
+    });
+
+    expect(result.wait).toEqual({ status: 'aborted' });
+    expect(result.handoff).toBeUndefined();
+    expect(result.reviewPackage).toBeUndefined();
+    expect(getGitStatus).not.toHaveBeenCalled();
+    expect(getFileDiff).not.toHaveBeenCalled();
+    expect(getSession).not.toHaveBeenCalled();
+  });
+
+  it('idle delegate_and_wait does not include diagnostics', async () => {
+    const kimi = makeKimi({
+      getStatus: vi.fn(async () => ({ status: 'idle' })),
+      listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done' }]),
+      getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 })),
+      getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ diff' })),
+      getSession: vi.fn(async () => ({ id: 's1', title: 'test', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 })),
+    });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    const result = await handlers.kimi_delegate_and_wait({
+      cwd: '/repo',
+      task: 'implement x',
+      acceptanceCriteria: ['tests pass'],
+      plan: ['edit code'],
+    });
+
+    expect(result.wait).toEqual({ status: 'idle' });
+    expect(result.diagnostics).toBeUndefined();
+    expect(result.handoff).toBeDefined();
+    expect(result.reviewPackage).toBeDefined();
+  });
+
   it('returns pending approvals when delegate_and_wait is blocked on approval', async () => {
     const kimi = makeKimi({
       getStatus: vi.fn(async () => ({ status: 'awaiting_approval' })),
