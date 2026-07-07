@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { ChildProcess } from 'node:child_process';
 import { KimiApiError, KimiNetworkError } from '../src/errors.js';
 import type { KimiHttpClient } from '../src/kimi/http.js';
 import { KimiPreflight, type BridgeStatus } from '../src/preflight.js';
 import type { BridgeConfig } from '../src/config.js';
+import { loadBridgeConfig } from '../src/config.js';
 
 function makeConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
   return {
@@ -17,6 +21,7 @@ function makeConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     serverTokenSource: 'none',
     autoStart: true,
     kimiCommand: 'kimi',
+    preflightCacheMs: 5000,
     ...overrides,
   };
 }
@@ -156,6 +161,30 @@ describe('KimiPreflight', () => {
     await expect(preflight.ensureReady()).rejects.toThrow(/token may be invalid|--dangerous-bypass-auth|KIMI_CODE_HOME/);
   });
 
+  it('re-reads token file on 401 using the default resolver', async () => {
+    const codeHome = mkdtempSync(join(tmpdir(), 'kimi-bridge-token-reload-'));
+    try {
+      writeFileSync(join(codeHome, 'server.token'), 'old');
+
+      const config = loadBridgeConfig({ KIMI_CODE_HOME: codeHome });
+      expect(config.serverToken).toBe('old');
+      expect(config.serverTokenSource).toBe('kimi_code_home');
+      expect(config.envServerToken).toBeUndefined();
+
+      writeFileSync(join(codeHome, 'server.token'), 'new');
+
+      const http = makeTokenAwareHttp('old', 'new');
+      const preflight = new KimiPreflight(config, http, { pollIntervalMs: 10 });
+
+      const result = await preflight.ensureReady();
+      expect(result.authOk).toBe(true);
+      expect(result.tokenSource).toBe('kimi_code_home');
+      expect(http.setServerToken).toHaveBeenCalledWith('new');
+    } finally {
+      rmSync(codeHome, { recursive: true, force: true });
+    }
+  });
+
   it('getStatus does not auto-start and returns diagnostics', async () => {
     const http = makeHttp({ healthz: ['error'] });
     const spawn = vi.fn(() => makeFakeChildProcess());
@@ -166,5 +195,126 @@ describe('KimiPreflight', () => {
     expect(status.authOk).toBe(false);
     expect(spawn).not.toHaveBeenCalled();
     expect(status.diagnostics.length).toBeGreaterThan(0);
+    expect(status.preflightCacheMs).toBe(5000);
+    expect(status.cacheFresh).toBe(false);
+  });
+
+  describe('success cache', () => {
+    it('caches a successful ensureReady result and reuses it within the cache window', async () => {
+      const http = makeHttp({ healthz: ['ok'], config: ['ok'] });
+      let time = 0;
+      const preflight = new KimiPreflight(makeConfig({ preflightCacheMs: 5000 }), http, { now: () => time });
+
+      const first = await preflight.ensureReady();
+      expect(first.healthzOk).toBe(true);
+      expect(first.authOk).toBe(true);
+      expect(first.preflightCacheMs).toBe(5000);
+      expect(http.get).toHaveBeenCalledTimes(2);
+
+      time = 1000;
+      const second = await preflight.ensureReady();
+      expect(second.healthzOk).toBe(true);
+      expect(second.authOk).toBe(true);
+      expect(second.cacheFresh).toBe(true);
+      expect(second.cacheAgeMs).toBe(1000);
+      expect(second.cachedUntil).toBe(5000);
+      expect(http.get).toHaveBeenCalledTimes(2);
+    });
+
+    it('re-checks healthz/config after the cache window expires', async () => {
+      const http = makeHttp({ healthz: ['ok', 'ok'], config: ['ok', 'ok'] });
+      let time = 0;
+      const preflight = new KimiPreflight(makeConfig({ preflightCacheMs: 100 }), http, { now: () => time });
+
+      await preflight.ensureReady();
+      expect(http.get).toHaveBeenCalledTimes(2);
+
+      time = 101;
+      await preflight.ensureReady();
+      expect(http.get).toHaveBeenCalledTimes(4);
+    });
+
+    it('does not cache failed ensureReady results', async () => {
+      const http = makeHttp({ healthz: ['error', 'ok'], config: ['ok'] });
+      let time = 0;
+      const preflight = new KimiPreflight(makeConfig({ preflightCacheMs: 5000, autoStart: false }), http, { now: () => time });
+
+      await expect(preflight.ensureReady()).rejects.toThrow(/not reachable|auto-start disabled/);
+      expect(http.get).toHaveBeenCalledTimes(1);
+
+      time = 100;
+      const result = await preflight.ensureReady();
+      expect(result.healthzOk).toBe(true);
+      expect(result.authOk).toBe(true);
+      expect(http.get).toHaveBeenCalledTimes(3);
+    });
+
+    it('caches the successful result after auto-starting the server', async () => {
+      const http = makeHttp({ healthz: ['error', 'ok'], config: ['ok'] });
+      const spawn = vi.fn(() => makeFakeChildProcess());
+      let time = 0;
+      const preflight = new KimiPreflight(makeConfig({ preflightCacheMs: 5000, autoStart: true }), http, {
+        spawn,
+        pollIntervalMs: 10,
+        now: () => time,
+      });
+
+      const promise = preflight.ensureReady();
+      await vi.advanceTimersByTimeAsync(50);
+      const first = await promise;
+      expect(first.healthzOk).toBe(true);
+      expect(first.authOk).toBe(true);
+      const callsAfterFirst = vi.mocked(http.get).mock.calls.length;
+
+      time = 1000;
+      const second = await preflight.ensureReady();
+      expect(second.healthzOk).toBe(true);
+      expect(second.cacheFresh).toBe(true);
+      expect(vi.mocked(http.get).mock.calls.length).toBe(callsAfterFirst);
+    });
+
+    it('caches the result after reloading the token on 401', async () => {
+      const http = makeTokenAwareHttp('old', 'new');
+      let time = 0;
+      const preflight = new KimiPreflight(
+        makeConfig({ serverToken: 'old', serverTokenSource: 'home', preflightCacheMs: 5000 }),
+        http,
+        {
+          resolveToken: () => ({ token: 'new', source: 'env' as const }),
+          now: () => time,
+        },
+      );
+
+      const first = await preflight.ensureReady();
+      expect(first.authOk).toBe(true);
+      expect(first.tokenSource).toBe('env');
+      const callsAfterFirst = vi.mocked(http.get).mock.calls.length;
+
+      time = 1000;
+      const second = await preflight.ensureReady();
+      expect(second.authOk).toBe(true);
+      expect(second.tokenSource).toBe('env');
+      expect(second.cacheFresh).toBe(true);
+      expect(vi.mocked(http.get).mock.calls.length).toBe(callsAfterFirst);
+    });
+
+    it('getStatus always checks live and does not update the success cache', async () => {
+      const http = makeHttp({ healthz: ['ok', 'ok', 'ok'], config: ['ok', 'ok', 'ok'] });
+      let time = 0;
+      const preflight = new KimiPreflight(makeConfig({ preflightCacheMs: 5000 }), http, { now: () => time });
+
+      await preflight.ensureReady();
+      expect(http.get).toHaveBeenCalledTimes(2);
+
+      const status = await preflight.getStatus();
+      expect(status.healthzOk).toBe(true);
+      expect(status.cacheFresh).toBe(false);
+      expect(http.get).toHaveBeenCalledTimes(4);
+
+      time = 1000;
+      const cached = await preflight.ensureReady();
+      expect(cached.cacheFresh).toBe(true);
+      expect(http.get).toHaveBeenCalledTimes(4);
+    });
   });
 });

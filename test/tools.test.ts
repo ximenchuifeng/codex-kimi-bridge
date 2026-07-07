@@ -31,13 +31,14 @@ function makeConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     serverTokenSource: 'none',
     autoStart: true,
     kimiCommand: 'kimi',
+    preflightCacheMs: 5000,
     ...overrides,
   };
 }
 
 function makePreflight(overrides: Partial<import('../src/preflight.js').BridgeStatus> = {}): KimiPreflight {
   return {
-    ensureReady: vi.fn(async () => ({ healthzOk: true, authOk: true, ...overrides })),
+    ensureReady: vi.fn(async () => ({ healthzOk: true, authOk: true, preflightCacheMs: 5000, ...overrides })),
     getStatus: vi.fn(async () => ({
       serverUrl: 'http://127.0.0.1:58627',
       healthzOk: true,
@@ -46,6 +47,8 @@ function makePreflight(overrides: Partial<import('../src/preflight.js').BridgeSt
       autoStart: true,
       kimiCommand: 'kimi',
       diagnostics: [],
+      preflightCacheMs: 5000,
+      cacheFresh: false,
       ...overrides,
     })),
   } as unknown as KimiPreflight;
@@ -69,13 +72,33 @@ describe('tool handlers', () => {
     const kimi = makeKimi();
     const handlers = createToolHandlers({ kimi, config: makeConfig(), preflight: makePreflight() });
 
-    await expect(handlers.kimi_delegate_task({
+    const result = await handlers.kimi_delegate_task({
       cwd: '/repo',
       task: 'implement x',
       acceptanceCriteria: ['passes tests'],
       plan: ['edit code'],
       swarmMode: false,
-    })).resolves.toMatchObject({ sessionId: 's1', promptId: 'p1' });
+    });
+
+    expect(result).toMatchObject({ sessionId: 's1', promptId: 'p1' });
+    expect(result.webUrl).toBe('http://127.0.0.1:58627/sessions/s1');
+  });
+
+  it('url-encodes the session id in the webUrl', async () => {
+    const kimi = makeKimi({
+      createSession: vi.fn(async () => ({ id: 'a/b c' })),
+    });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    const result = await handlers.kimi_delegate_task({
+      cwd: '/repo',
+      task: 'implement x',
+      acceptanceCriteria: ['passes tests'],
+      plan: ['edit code'],
+      swarmMode: false,
+    });
+
+    expect(result.webUrl).toBe('http://127.0.0.1:58627/sessions/a%2Fb%20c');
   });
 
   it('waits until idle using the configured default timeout', async () => {
@@ -132,6 +155,7 @@ describe('tool handlers', () => {
     });
 
     expect(result).toMatchObject({ sessionId: 's1', promptId: 'p1' });
+    expect(result.webUrl).toBe('http://127.0.0.1:58627/sessions/s1');
     expect(kimi.submitPrompt).toHaveBeenCalledWith(
       's1',
       expect.objectContaining({

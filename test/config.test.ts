@@ -17,8 +17,10 @@ describe('loadBridgeConfig', () => {
         requestTimeoutMs: 30000,
         serverToken: undefined,
         serverTokenSource: 'none',
+        envServerToken: undefined,
         autoStart: true,
         kimiCommand: 'kimi',
+        preflightCacheMs: 5000,
         kimiCodeHome: undefined,
       });
     } finally {
@@ -32,6 +34,14 @@ describe('loadBridgeConfig', () => {
     expect(loadBridgeConfig({ KIMI_REQUEST_TIMEOUT_MS: '0' }).requestTimeoutMs).toBe(30000);
     expect(loadBridgeConfig({ KIMI_REQUEST_TIMEOUT_MS: '-100' }).requestTimeoutMs).toBe(30000);
     expect(loadBridgeConfig({ KIMI_REQUEST_TIMEOUT_MS: '15000' }).requestTimeoutMs).toBe(15000);
+  });
+
+  it('parses KIMI_PREFLIGHT_CACHE_MS with safe fallback and allows 0', () => {
+    expect(loadBridgeConfig({}).preflightCacheMs).toBe(5000);
+    expect(loadBridgeConfig({ KIMI_PREFLIGHT_CACHE_MS: 'not-a-number' }).preflightCacheMs).toBe(5000);
+    expect(loadBridgeConfig({ KIMI_PREFLIGHT_CACHE_MS: '-100' }).preflightCacheMs).toBe(5000);
+    expect(loadBridgeConfig({ KIMI_PREFLIGHT_CACHE_MS: '0' }).preflightCacheMs).toBe(0);
+    expect(loadBridgeConfig({ KIMI_PREFLIGHT_CACHE_MS: '10000' }).preflightCacheMs).toBe(10000);
   });
 
   it('normalizes a server URL with /api/v1 suffix and trailing slash', () => {

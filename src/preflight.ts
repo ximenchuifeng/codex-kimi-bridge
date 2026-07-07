@@ -11,6 +11,10 @@ export interface BridgeStatus {
   tokenSource: TokenSource;
   autoStart: boolean;
   kimiCommand: string;
+  preflightCacheMs: number;
+  cacheFresh?: boolean;
+  cacheAgeMs?: number;
+  cachedUntil?: number;
   diagnostics: string[];
 }
 
@@ -26,7 +30,7 @@ const DEFAULT_STARTUP_TIMEOUT_MS = 30000;
 const DEFAULT_POLL_INTERVAL_MS = 500;
 
 function defaultResolveToken(config: BridgeConfig): { token?: string; source: TokenSource } {
-  return resolveServerToken(config.serverToken, config.kimiCodeHome, homedir());
+  return resolveServerToken(config.envServerToken, config.kimiCodeHome, homedir());
 }
 
 export class KimiPreflight {
@@ -35,6 +39,8 @@ export class KimiPreflight {
   private readonly now: NonNullable<PreflightOptions['now']>;
   private readonly startupTimeoutMs: number;
   private readonly pollIntervalMs: number;
+  private lastSuccessStatus?: BridgeStatus;
+  private lastSuccessAt?: number;
 
   constructor(
     private readonly config: BridgeConfig,
@@ -49,6 +55,9 @@ export class KimiPreflight {
   }
 
   async ensureReady(): Promise<BridgeStatus> {
+    const cached = this.readCache();
+    if (cached) return cached;
+
     let status = await this.checkOnce();
 
     if (!status.healthzOk) {
@@ -66,11 +75,38 @@ export class KimiPreflight {
       status = await this.verifyAuthWithRetry();
     }
 
+    if (status.healthzOk && status.authOk) {
+      this.writeCache(status);
+    }
+
     return status;
   }
 
   async getStatus(): Promise<BridgeStatus> {
     return this.checkOnce();
+  }
+
+  private readCache(): BridgeStatus | undefined {
+    if (this.config.preflightCacheMs <= 0 || !this.lastSuccessStatus || this.lastSuccessAt == null) {
+      return undefined;
+    }
+    const now = this.now();
+    const age = now - this.lastSuccessAt;
+    if (age > this.config.preflightCacheMs) {
+      return undefined;
+    }
+    return {
+      ...this.lastSuccessStatus,
+      cacheFresh: true,
+      cacheAgeMs: age,
+      cachedUntil: this.lastSuccessAt + this.config.preflightCacheMs,
+    };
+  }
+
+  private writeCache(status: BridgeStatus): void {
+    if (this.config.preflightCacheMs <= 0) return;
+    this.lastSuccessStatus = status;
+    this.lastSuccessAt = this.now();
   }
 
   private async checkOnce(): Promise<BridgeStatus> {
@@ -101,6 +137,8 @@ export class KimiPreflight {
       tokenSource: this.config.serverTokenSource,
       autoStart: this.config.autoStart,
       kimiCommand: this.config.kimiCommand,
+      preflightCacheMs: this.config.preflightCacheMs,
+      cacheFresh: false,
       diagnostics,
     };
   }

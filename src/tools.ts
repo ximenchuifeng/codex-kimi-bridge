@@ -52,10 +52,10 @@ export interface AbortInput {
 }
 
 export interface ToolHandlers {
-  kimi_delegate_task: (input: DelegateTaskInput) => Promise<{ sessionId: string; promptId: string; status: string }>;
+  kimi_delegate_task: (input: DelegateTaskInput) => Promise<{ sessionId: string; promptId: string; status: string; webUrl: string }>;
   kimi_wait_until_idle: (input: WaitUntilIdleInput) => Promise<WaitUntilIdleResult>;
   kimi_get_handoff: (input: GetHandoffInput) => Promise<KimiHandoff>;
-  kimi_continue_task: (input: ContinueTaskInput) => Promise<{ sessionId: string; promptId: string; status: string }>;
+  kimi_continue_task: (input: ContinueTaskInput) => Promise<{ sessionId: string; promptId: string; status: string; webUrl: string }>;
   kimi_get_diff: (input: GetDiffInput) => Promise<{ path: string; diff: string }>;
   kimi_abort: (input: AbortInput) => Promise<{ sessionId: string; aborted: true }>;
   kimi_bridge_status: () => Promise<BridgeStatus>;
@@ -83,6 +83,10 @@ async function resolveModel(
   return model;
 }
 
+function buildWebUrl(serverUrl: string, sessionId: string): string {
+  return `${serverUrl}/sessions/${encodeURIComponent(sessionId)}`;
+}
+
 export function createToolHandlers(deps: ToolDeps): ToolHandlers {
   const handlers: ToolHandlers = {
     async kimi_bridge_status() {
@@ -107,7 +111,7 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
         planMode: false,
         swarmMode: input.swarmMode,
       });
-      return { sessionId: session.id, promptId: result.prompt_id, status: result.status };
+      return { sessionId: session.id, promptId: result.prompt_id, status: result.status, webUrl: buildWebUrl(deps.config.serverUrl, session.id) };
     },
 
     async kimi_wait_until_idle(input: WaitUntilIdleInput) {
@@ -160,7 +164,7 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
         planMode: false,
         swarmMode: input.swarmMode,
       });
-      return { sessionId: input.sessionId, promptId: result.prompt_id, status: result.status };
+      return { sessionId: input.sessionId, promptId: result.prompt_id, status: result.status, webUrl: buildWebUrl(deps.config.serverUrl, input.sessionId) };
     },
 
     async kimi_get_diff(input: GetDiffInput) {

@@ -50,6 +50,17 @@ If you use a custom `KIMI_CODE_HOME` for Kimi Code, make sure the bridge sees th
 export KIMI_CODE_HOME=/path/to/your/kimi/home
 ```
 
+### Preflight cache
+
+The bridge preflights the Kimi server before each tool call. A successful preflight result is cached for a short time so that a rapid sequence of calls does not repeat healthz + config checks.
+
+- `KIMI_PREFLIGHT_CACHE_MS` controls the cache lifetime in milliseconds.
+- Default: `5000` (5 seconds).
+- Set to `0` to disable caching and check every time.
+- Malformed or negative values fall back to `5000`.
+
+The `kimi_bridge_status` tool always performs a live check and does not use or update the success cache, so it reflects the current server state.
+
 ### Local smoke test with auth disabled
 
 For local smoke testing only, you can start Kimi with authentication disabled:
@@ -111,6 +122,16 @@ Or write it to the default token file:
 mkdir -p ~/.kimi-code
 echo -n "your-kimi-server-token" > ~/.kimi-code/server.token
 ```
+
+## Web session links
+
+Both `kimi_delegate_task` and `kimi_continue_task` return a `webUrl` pointing to the Kimi Web view of the session:
+
+```text
+<serverUrl>/sessions/<sessionId>
+```
+
+The `sessionId` is URL-encoded, and the link intentionally contains no server token or authentication query parameters. If you have already opened and authenticated with Kimi Web in your browser, you can visit `webUrl` directly. If you have not yet authenticated, the Kimi Web UI will prompt you to authenticate before showing the session.
 
 ## Model Resolution
 

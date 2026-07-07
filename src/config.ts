@@ -12,8 +12,10 @@ export interface BridgeConfig {
   requestTimeoutMs: number;
   serverToken?: string;
   serverTokenSource: TokenSource;
+  envServerToken?: string;
   autoStart: boolean;
   kimiCommand: string;
+  preflightCacheMs: number;
   kimiCodeHome?: string;
 }
 
@@ -28,6 +30,12 @@ function normalizeServerUrl(raw: string): string {
 function parseRequestTimeoutMs(raw: string | undefined): number {
   const parsed = Number.parseInt(raw ?? '30000', 10);
   if (Number.isNaN(parsed) || parsed <= 0) return 30000;
+  return parsed;
+}
+
+function parsePreflightCacheMs(raw: string | undefined): number {
+  const parsed = Number.parseInt(raw ?? '5000', 10);
+  if (Number.isNaN(parsed) || parsed < 0) return 5000;
   return parsed;
 }
 
@@ -76,8 +84,10 @@ export function loadBridgeConfig(env: NodeJS.ProcessEnv = process.env): BridgeCo
     requestTimeoutMs: parseRequestTimeoutMs(env.KIMI_REQUEST_TIMEOUT_MS),
     serverToken: token,
     serverTokenSource: source,
+    envServerToken: env.KIMI_SERVER_TOKEN,
     autoStart: !(env.KIMI_AUTO_START === 'false' || env.KIMI_AUTO_START === '0'),
     kimiCommand: env.KIMI_COMMAND && env.KIMI_COMMAND.trim().length > 0 ? env.KIMI_COMMAND.trim() : 'kimi',
+    preflightCacheMs: parsePreflightCacheMs(env.KIMI_PREFLIGHT_CACHE_MS),
     kimiCodeHome,
   };
 }

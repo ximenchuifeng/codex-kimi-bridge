@@ -11,6 +11,7 @@
         "KIMI_THINKING": "high",
         "KIMI_AUTO_START": "true",
         "KIMI_COMMAND": "kimi",
+        "KIMI_PREFLIGHT_CACHE_MS": "5000",
         "KIMI_CODE_HOME": "",
         "KIMI_SERVER_TOKEN": ""
       }
