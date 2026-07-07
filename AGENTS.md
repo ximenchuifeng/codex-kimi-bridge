@@ -130,6 +130,8 @@ When `dedupe` finds a reusable session, the bridge returns the existing session 
 
 `dedupe` only reuses sessions in `running`, `idle`, `awaiting_approval`, or `awaiting_question` status. It never automatically reuses an `aborted` session. If the matched session is `aborted`, inspect the `webUrl` and use `kimi_continue_task` to resume it manually; do not expect `kimi_delegate_and_wait` to resume it automatically.
 
+By default, `dedupe` only reuses a session when its `metadata.cwd` matches the `cwd` passed to `kimi_delegate_and_wait`. This prevents accidentally reusing a session from a different project or workspace even when the title matches. Only pass `matchAnyCwd: true` when you intentionally want to recover a session from another workspace; for daily use, keep the default `cwd-safe` behavior.
+
 If you need more control, or if the task title is hard to make unique, call `kimi_find_recent_session` (when you remember part of the title) or `kimi_recent_sessions` first. Check the returned `status`, `title`, and `webUrl` to decide whether to continue an existing session (`kimi_continue_task`), wait for it (`kimi_wait_until_idle`), or abort it (`kimi_abort`). Do not blindly start a new `kimi_delegate_task` before confirming there is no orphaned or duplicate session.
 
 ## Verification Commands

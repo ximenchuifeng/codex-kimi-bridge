@@ -124,3 +124,4 @@ Guidelines:
 - Omit `dedupe` for one-off exploratory tasks where duplicates are not a concern.
 - When `dedupe` returns an existing session, follow `suggestedNextActions` instead of immediately calling `kimi_delegate_task` again.
 - `dedupe` only reuses `running`, `idle`, `awaiting_approval`, and `awaiting_question` sessions. For `aborted` sessions, inspect the `webUrl` and use `kimi_continue_task`.
+- By default, `dedupe` only reuses sessions whose `metadata.cwd` matches the `cwd` you pass in. This prevents accidentally reusing a session from a different project or workspace. Only add `matchAnyCwd: true` when you intentionally want to recover a session from another workspace; for daily use, leave it out.

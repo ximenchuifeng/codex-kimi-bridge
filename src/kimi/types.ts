@@ -61,6 +61,7 @@ export interface RecentSession {
   status: WireSession['status'];
   title: string;
   webUrl: string;
+  cwd?: string;
   createdAt?: string;
   updatedAt?: string;
 }

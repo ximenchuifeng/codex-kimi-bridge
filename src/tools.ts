@@ -43,6 +43,7 @@ export interface DelegateAndWaitDedupeInput {
   includeArchive?: boolean;
   excludeEmpty?: boolean;
   reuseIfStatus?: string[];
+  matchAnyCwd?: boolean;
 }
 
 export interface WaitUntilIdleInput {
@@ -90,12 +91,15 @@ export interface FindRecentSessionInput {
   pageSize?: number;
   includeArchive?: boolean;
   excludeEmpty?: boolean;
+  cwd?: string;
+  matchAnyCwd?: boolean;
 }
 
 export interface FindRecentSessionResult {
   query: Omit<FindRecentSessionInput, 'titleContains'> & { titleContains: string };
   match?: RecentSession;
   candidates: RecentSession[];
+  skippedCandidates?: RecentSession[];
   suggestedNextActions: string[];
 }
 
@@ -120,8 +124,10 @@ export interface DelegateAndWaitDedupeResult {
   checked: true;
   matched: boolean;
   reused: boolean;
+  cwdMatched?: boolean;
   reason?: string;
   match?: RecentSession;
+  skippedCandidates?: RecentSession[];
   query?: FindRecentSessionResult['query'];
   suggestedNextActions: string[];
 }
@@ -188,6 +194,13 @@ function buildWebUrl(serverUrl: string, sessionId: string): string {
   return `${serverUrl}/sessions/${encodeURIComponent(sessionId)}`;
 }
 
+function normalizeCwd(cwd: string | undefined): string | undefined {
+  if (cwd === undefined) return undefined;
+  const normalized = path.normalize(cwd);
+  // Strip trailing slash except for root '/', so '/repo' and '/repo/' compare equal.
+  return normalized.endsWith('/') && normalized.length > 1 ? normalized.slice(0, -1) : normalized;
+}
+
 function sanitizeSessionTitle(title: string): string {
   return title
     .replace(/#token=[^\s]+/gi, '#token=[redacted]')
@@ -200,6 +213,7 @@ function buildRecentSession(serverUrl: string, session: WireSession & { created_
     status: session.status,
     title: sanitizeDiagnosticText(session.title, serverToken),
     webUrl: buildWebUrl(serverUrl, session.id),
+    cwd: sanitizeDiagnosticText(session.metadata.cwd, serverToken),
     ...(session.created_at ? { createdAt: session.created_at } : {}),
     ...(session.updated_at ? { updatedAt: session.updated_at } : {}),
   };
@@ -261,6 +275,7 @@ function sanitizeDiagnosticText(value: string, token: string | undefined): strin
 interface FindRecentSessionByTitleResult {
   query: FindRecentSessionResult['query'];
   candidates: RecentSession[];
+  skippedCandidates?: RecentSession[];
   match?: RecentSession;
   suggestedNextActions: string[];
 }
@@ -283,10 +298,25 @@ async function findRecentSessionByTitle(
   });
 
   const normalizedQuery = titleContains.toLowerCase();
-  const candidates = result.items
-    .filter((session) => session.title.toLowerCase().includes(normalizedQuery))
-    .map((session) => buildRecentSession(deps.config.serverUrl, session, deps.config.serverToken));
+  const titleMatchedSessions = result.items.filter((session) =>
+    session.title.toLowerCase().includes(normalizedQuery),
+  );
 
+  const targetCwd = normalizeCwd(input.cwd);
+  const filterByCwd = targetCwd !== undefined && input.matchAnyCwd !== true;
+
+  let candidateSessions: typeof titleMatchedSessions;
+  let skippedSessions: typeof titleMatchedSessions | undefined;
+  if (filterByCwd) {
+    candidateSessions = titleMatchedSessions.filter((session) => normalizeCwd(session.metadata.cwd) === targetCwd);
+    skippedSessions = titleMatchedSessions.filter((session) => normalizeCwd(session.metadata.cwd) !== targetCwd);
+  } else {
+    candidateSessions = titleMatchedSessions;
+    skippedSessions = undefined;
+  }
+
+  const candidates = candidateSessions.map((session) => buildRecentSession(deps.config.serverUrl, session, deps.config.serverToken));
+  const skippedCandidates = skippedSessions?.map((session) => buildRecentSession(deps.config.serverUrl, session, deps.config.serverToken));
   const match = candidates[0];
 
   const suggestedNextActions = match
@@ -304,8 +334,11 @@ async function findRecentSessionByTitle(
       ...(input.pageSize !== undefined ? { pageSize: input.pageSize } : {}),
       ...(input.includeArchive !== undefined ? { includeArchive: input.includeArchive } : {}),
       ...(input.excludeEmpty !== undefined ? { excludeEmpty: input.excludeEmpty } : {}),
+      ...(input.cwd !== undefined ? { cwd: sanitizeDiagnosticText(input.cwd, deps.config.serverToken) } : {}),
+      ...(input.matchAnyCwd !== undefined ? { matchAnyCwd: input.matchAnyCwd } : {}),
     },
     candidates,
+    ...(skippedCandidates && skippedCandidates.length > 0 ? { skippedCandidates } : {}),
     ...(match ? { match } : {}),
     suggestedNextActions,
   };
@@ -493,6 +526,8 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
           pageSize: dedupeInput.pageSize,
           includeArchive: dedupeInput.includeArchive,
           excludeEmpty: dedupeInput.excludeEmpty,
+          cwd: input.cwd,
+          matchAnyCwd: dedupeInput.matchAnyCwd,
         });
 
         const reuseIfStatus = dedupeInput.reuseIfStatus ?? defaultReusableStatuses;
@@ -500,12 +535,16 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
         const userAllowsReuse = match && reuseIfStatus.includes(match.status);
         const bridgeSupportsReuse = match && supportedDedupeReuseStatuses.includes(match.status);
         const canReuse = userAllowsReuse && bridgeSupportsReuse;
+        const cwdMatched = match !== undefined
+          ? normalizeCwd(match.cwd) === normalizeCwd(input.cwd)
+          : (findResult.skippedCandidates && findResult.skippedCandidates.length > 0 ? false : undefined);
 
         if (canReuse) {
           const baseDedupe: DelegateAndWaitDedupeResult = {
             checked: true,
             matched: true,
             reused: true,
+            cwdMatched,
             match,
             query: findResult.query,
             suggestedNextActions: findResult.suggestedNextActions,
@@ -564,6 +603,8 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
         let reason: string | undefined;
         if (match) {
           reason = bridgeSupportsReuse ? 'status_not_reusable' : 'status_not_supported';
+        } else if (findResult.skippedCandidates && findResult.skippedCandidates.length > 0) {
+          reason = 'cwd_mismatch';
         }
 
         return {
@@ -572,7 +613,9 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
             checked: true,
             matched: !!match,
             reused: false,
+            cwdMatched,
             ...(match ? { match } : {}),
+            ...(findResult.skippedCandidates && findResult.skippedCandidates.length > 0 ? { skippedCandidates: findResult.skippedCandidates } : {}),
             ...(reason ? { reason } : {}),
             query: findResult.query,
             suggestedNextActions: findResult.suggestedNextActions,

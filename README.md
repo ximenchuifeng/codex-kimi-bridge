@@ -168,6 +168,7 @@ Input fields (all optional):
 The response contains an `items` array. Each item includes:
 
 - `sessionId`, `status`, `title`, and `webUrl`
+- `cwd`: the session's original working directory, taken from `session.metadata.cwd`. Included for diagnostics only; the `webUrl` is not affected.
 - `createdAt` and `updatedAt` when the server provides them
 
 No token or authorization information is returned.
@@ -185,12 +186,15 @@ Input fields:
 - `pageSize`: number of recent sessions to inspect. Default: `20`.
 - `includeArchive`: include archived sessions.
 - `excludeEmpty`: exclude sessions with no messages.
+- `cwd` *(optional)*: when provided, only sessions whose `metadata.cwd` matches this directory are returned. Trailing-slash differences are normalized, so `/repo` and `/repo/` are treated as the same directory.
+- `matchAnyCwd` *(optional)*: when `true`, disables the `cwd` filter and returns title matches from any working directory. Default: `false`.
 
 The response contains:
 
 - `query`: the normalized query that was executed.
 - `match`: the first matching session, if any.
-- `candidates`: all matching sessions, in the order returned by the Kimi server.
+- `candidates`: all matching sessions, in the order returned by the Kimi server. If `cwd` is provided and `matchAnyCwd` is not `true`, this list only includes sessions from the same `cwd`.
+- `skippedCandidates` *(optional)*: sessions whose title matched but whose `cwd` did not match. Only present when `cwd` is provided, `matchAnyCwd` is not `true`, and at least one title match was excluded for this reason.
 - `suggestedNextActions`: guidance based on the matched session status, or suggestions to widen the keyword or call `kimi_recent_sessions` when nothing matches.
 
 Status-based guidance:
@@ -240,6 +244,9 @@ Input fields under `dedupe`:
 - `includeArchive`: include archived sessions.
 - `excludeEmpty`: exclude sessions with no messages.
 - `reuseIfStatus`: array of statuses that the caller considers reusable. Default: `["running", "idle", "awaiting_approval", "awaiting_question"]`.
+- `matchAnyCwd` *(optional)*: when `true`, allows reusing a session from any working directory. Default: `false`.
+
+By default, dedupe only reuses a session if its `metadata.cwd` matches the `cwd` passed to `kimi_delegate_and_wait`. This prevents accidentally reusing a session from a different project or workspace, even when the title matches. Trailing-slash differences are normalized, so `/repo` and `/repo/` are treated as the same directory. Only set `matchAnyCwd: true` when you intentionally want to recover a session from another workspace.
 
 Only the following statuses can actually be reused automatically: `running`, `idle`, `awaiting_approval`, and `awaiting_question`. The bridge will never automatically reuse an `aborted` session, even if you include `aborted` in `reuseIfStatus`. If you find an aborted session, inspect the `webUrl` and use `kimi_continue_task` instead of relying on `kimi_delegate_and_wait` to resume it.
 
@@ -247,9 +254,10 @@ Result behavior:
 
 - If `dedupe` is omitted, the tool behaves exactly as before and creates a new session.
 - If no matching session is found, the tool delegates normally and includes `dedupe.checked=true`, `dedupe.matched=false`, `dedupe.reused=false` in the result.
-- If a matching session is `running`, `idle`, `awaiting_approval`, or `awaiting_question`, and that status is in `reuseIfStatus`, the result contains the existing `sessionId`, `webUrl`, and appropriate wait state. No new session is created and no prompt is submitted. `dedupe.reused` is `true`.
+- If a matching session is `running`, `idle`, `awaiting_approval`, or `awaiting_question`, and that status is in `reuseIfStatus`, and the session `cwd` matches (or `matchAnyCwd` is `true`), the result contains the existing `sessionId`, `webUrl`, and appropriate wait state. No new session is created and no prompt is submitted. `dedupe.reused` is `true` and `dedupe.cwdMatched` indicates whether the reuse happened within the same `cwd`.
 - If a matching session is supported for reuse but its status is not in `reuseIfStatus`, the tool delegates normally and reports `dedupe.matched=true`, `dedupe.reused=false`, `dedupe.reason="status_not_reusable"`.
 - If a matching session is not supported for reuse at all (for example, `aborted`), the tool delegates normally and reports `dedupe.matched=true`, `dedupe.reused=false`, `dedupe.reason="status_not_supported"`. For `aborted` matches, open the `webUrl` to inspect the cause and use `kimi_continue_task` if needed.
+- If one or more title matches were found but all were excluded because their `cwd` differed, the tool delegates normally and reports `dedupe.matched=false`, `dedupe.reused=false`, `dedupe.reason="cwd_mismatch"`, plus `dedupe.skippedCandidates` for diagnostics.
 
 No token or authorization information is returned by the dedupe search.
 

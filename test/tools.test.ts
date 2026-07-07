@@ -1446,5 +1446,298 @@ describe('tool handlers', () => {
       expect(result.dedupe?.match?.title).toContain('#token=[redacted]');
       expect(result.dedupe?.query?.titleContains).toBe('http://127.0.0.1:58627/#token=[redacted] [redacted]');
     });
+
+    it('reuses an idle session with the same cwd by default', async () => {
+      const createSession = vi.fn(async () => ({ id: 's1' }));
+      const submitPrompt = vi.fn(async () => ({ prompt_id: 'p1', user_message_id: 'm1', status: 'running' }));
+      const listSessions = vi.fn(async () => ({
+        items: [{ id: 's2', title: 'Feature X', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 }],
+      }));
+      const kimi = makeKimi({
+        createSession,
+        submitPrompt,
+        listSessions,
+        getStatus: vi.fn(async () => ({ status: 'idle' })),
+        listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done' }]),
+        getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 })),
+        getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ diff' })),
+        getSession: vi.fn(async () => ({ id: 's2', title: 'Feature X', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 })),
+      });
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+      const result = await handlers.kimi_delegate_and_wait({
+        cwd: '/repo',
+        task: 'implement x',
+        acceptanceCriteria: ['tests pass'],
+        plan: ['edit code'],
+        dedupe: { titleContains: 'feature' },
+      });
+
+      expect(createSession).not.toHaveBeenCalled();
+      expect(submitPrompt).not.toHaveBeenCalled();
+      expect(result.sessionId).toBe('s2');
+      expect(result.dedupe?.reused).toBe(true);
+      expect(result.dedupe?.reason).toBe('idle');
+      expect(result.dedupe?.cwdMatched).toBe(true);
+    });
+
+    it('does not reuse a session with a different cwd by default and reports cwd_mismatch', async () => {
+      const createSession = vi.fn(async () => ({ id: 's1' }));
+      const submitPrompt = vi.fn(async () => ({ prompt_id: 'p1', user_message_id: 'm1', status: 'running' }));
+      const listSessions = vi.fn(async () => ({
+        items: [{ id: 's2', title: 'Feature X', status: 'idle', metadata: { cwd: '/other' }, agent_config: {}, last_seq: 0 }],
+      }));
+      const kimi = makeKimi({
+        createSession,
+        submitPrompt,
+        listSessions,
+        getStatus: vi.fn(async () => ({ status: 'idle' })),
+        listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done' }]),
+        getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 })),
+        getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ diff' })),
+        getSession: vi.fn(async () => ({ id: 's1', title: 'test', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 })),
+      });
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+      const result = await handlers.kimi_delegate_and_wait({
+        cwd: '/repo',
+        task: 'implement x',
+        acceptanceCriteria: ['tests pass'],
+        plan: ['edit code'],
+        dedupe: { titleContains: 'feature' },
+      });
+
+      expect(createSession).toHaveBeenCalled();
+      expect(submitPrompt).toHaveBeenCalled();
+      expect(result.sessionId).toBe('s1');
+      expect(result.dedupe?.reused).toBe(false);
+      expect(result.dedupe?.reason).toBe('cwd_mismatch');
+      expect(result.dedupe?.cwdMatched).toBe(false);
+      expect(result.dedupe?.skippedCandidates?.length).toBe(1);
+      expect(result.dedupe?.skippedCandidates?.[0].sessionId).toBe('s2');
+      expect(result.dedupe?.skippedCandidates?.[0].cwd).toBe('/other');
+    });
+
+    it('ignores trailing slash differences when matching cwd', async () => {
+      const createSession = vi.fn(async () => ({ id: 's1' }));
+      const submitPrompt = vi.fn(async () => ({ prompt_id: 'p1', user_message_id: 'm1', status: 'running' }));
+      const listSessions = vi.fn(async () => ({
+        items: [{ id: 's2', title: 'Feature X', status: 'idle', metadata: { cwd: '/repo/' }, agent_config: {}, last_seq: 0 }],
+      }));
+      const kimi = makeKimi({
+        createSession,
+        submitPrompt,
+        listSessions,
+        getStatus: vi.fn(async () => ({ status: 'idle' })),
+        listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done' }]),
+        getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 })),
+        getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ diff' })),
+        getSession: vi.fn(async () => ({ id: 's2', title: 'Feature X', status: 'idle', metadata: { cwd: '/repo/' }, agent_config: {}, last_seq: 0 })),
+      });
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+      const result = await handlers.kimi_delegate_and_wait({
+        cwd: '/repo',
+        task: 'implement x',
+        acceptanceCriteria: ['tests pass'],
+        plan: ['edit code'],
+        dedupe: { titleContains: 'feature' },
+      });
+
+      expect(createSession).not.toHaveBeenCalled();
+      expect(result.dedupe?.reused).toBe(true);
+      expect(result.dedupe?.cwdMatched).toBe(true);
+    });
+
+    it('reuses a session from a different cwd when matchAnyCwd is true', async () => {
+      const createSession = vi.fn(async () => ({ id: 's1' }));
+      const submitPrompt = vi.fn(async () => ({ prompt_id: 'p1', user_message_id: 'm1', status: 'running' }));
+      const listSessions = vi.fn(async () => ({
+        items: [{ id: 's2', title: 'Feature X', status: 'idle', metadata: { cwd: '/other' }, agent_config: {}, last_seq: 0 }],
+      }));
+      const kimi = makeKimi({
+        createSession,
+        submitPrompt,
+        listSessions,
+        getStatus: vi.fn(async () => ({ status: 'idle' })),
+        listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done' }]),
+        getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 })),
+        getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ diff' })),
+        getSession: vi.fn(async () => ({ id: 's2', title: 'Feature X', status: 'idle', metadata: { cwd: '/other' }, agent_config: {}, last_seq: 0 })),
+      });
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+      const result = await handlers.kimi_delegate_and_wait({
+        cwd: '/repo',
+        task: 'implement x',
+        acceptanceCriteria: ['tests pass'],
+        plan: ['edit code'],
+        dedupe: { titleContains: 'feature', matchAnyCwd: true },
+      });
+
+      expect(createSession).not.toHaveBeenCalled();
+      expect(submitPrompt).not.toHaveBeenCalled();
+      expect(result.sessionId).toBe('s2');
+      expect(result.dedupe?.reused).toBe(true);
+      expect(result.dedupe?.cwdMatched).toBe(false);
+    });
+
+    it('reports cwdMatched=true with matchAnyCwd when the session cwd actually matches', async () => {
+      const createSession = vi.fn(async () => ({ id: 's1' }));
+      const submitPrompt = vi.fn(async () => ({ prompt_id: 'p1', user_message_id: 'm1', status: 'running' }));
+      const listSessions = vi.fn(async () => ({
+        items: [{ id: 's2', title: 'Feature X', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 }],
+      }));
+      const kimi = makeKimi({
+        createSession,
+        submitPrompt,
+        listSessions,
+        getStatus: vi.fn(async () => ({ status: 'idle' })),
+        listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done' }]),
+        getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 })),
+        getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ diff' })),
+        getSession: vi.fn(async () => ({ id: 's2', title: 'Feature X', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 })),
+      });
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+      const result = await handlers.kimi_delegate_and_wait({
+        cwd: '/repo',
+        task: 'implement x',
+        acceptanceCriteria: ['tests pass'],
+        plan: ['edit code'],
+        dedupe: { titleContains: 'feature', matchAnyCwd: true },
+      });
+
+      expect(createSession).not.toHaveBeenCalled();
+      expect(result.dedupe?.reused).toBe(true);
+      expect(result.dedupe?.cwdMatched).toBe(true);
+    });
+
+    it('does not leak cwd metadata token-like values in dedupe diagnostics', async () => {
+      const createSession = vi.fn(async () => ({ id: 's1' }));
+      const submitPrompt = vi.fn(async () => ({ prompt_id: 'p1', user_message_id: 'm1', status: 'running' }));
+      const listSessions = vi.fn(async () => ({
+        items: [{ id: 's2', title: 'Feature X', status: 'idle', metadata: { cwd: '/other/#token=secret' }, agent_config: {}, last_seq: 0 }],
+      }));
+      const kimi = makeKimi({
+        createSession,
+        submitPrompt,
+        listSessions,
+        getStatus: vi.fn(async () => ({ status: 'idle' })),
+        listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done' }]),
+        getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 })),
+        getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ diff' })),
+        getSession: vi.fn(async () => ({ id: 's1', title: 'test', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 })),
+      });
+      const handlers = createToolHandlers({
+        kimi: kimi as never,
+        config: makeConfig({ serverToken: 'config-secret' }),
+        preflight: makePreflight(),
+      });
+
+      const result = await handlers.kimi_delegate_and_wait({
+        cwd: '/repo',
+        task: 'implement x',
+        acceptanceCriteria: ['tests pass'],
+        plan: ['edit code'],
+        dedupe: { titleContains: 'feature' },
+      });
+
+      expect(result.dedupe?.reason).toBe('cwd_mismatch');
+      expect(JSON.stringify(result.dedupe)).not.toContain('secret');
+      expect(JSON.stringify(result.dedupe)).not.toContain('config-secret');
+    });
+  });
+
+  describe('cwd filtering in find_recent_session', () => {
+    it('returns only sessions matching cwd when cwd is provided', async () => {
+      const listSessions = vi.fn(async () => ({
+        items: [
+          { id: 's1', title: 'Feature X', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+          { id: 's2', title: 'Feature Y', status: 'idle', metadata: { cwd: '/other' }, agent_config: {}, last_seq: 0 },
+        ],
+      }));
+      const kimi = makeKimi({ listSessions });
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+      const result = await handlers.kimi_find_recent_session({ titleContains: 'feature', cwd: '/repo' });
+
+      expect(result.match?.sessionId).toBe('s1');
+      expect(result.candidates.map((c) => c.sessionId)).toEqual(['s1']);
+      expect(result.candidates[0].cwd).toBe('/repo');
+      expect(result.query.cwd).toBe('/repo');
+    });
+
+    it('ignores trailing slash differences when filtering by cwd', async () => {
+      const listSessions = vi.fn(async () => ({
+        items: [
+          { id: 's1', title: 'Feature X', status: 'idle', metadata: { cwd: '/repo/' }, agent_config: {}, last_seq: 0 },
+        ],
+      }));
+      const kimi = makeKimi({ listSessions });
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+      const result = await handlers.kimi_find_recent_session({ titleContains: 'feature', cwd: '/repo' });
+
+      expect(result.match?.sessionId).toBe('s1');
+      expect(result.candidates[0].cwd).toBe('/repo/');
+    });
+
+    it('returns all matching sessions when cwd is omitted (legacy behavior)', async () => {
+      const listSessions = vi.fn(async () => ({
+        items: [
+          { id: 's1', title: 'Feature X', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+          { id: 's2', title: 'Feature Y', status: 'idle', metadata: { cwd: '/other' }, agent_config: {}, last_seq: 0 },
+        ],
+      }));
+      const kimi = makeKimi({ listSessions });
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+      const result = await handlers.kimi_find_recent_session({ titleContains: 'feature' });
+
+      expect(result.match?.sessionId).toBe('s1');
+      expect(result.candidates.map((c) => c.sessionId)).toEqual(['s1', 's2']);
+    });
+
+    it('returns all cwd matches when matchAnyCwd is true', async () => {
+      const listSessions = vi.fn(async () => ({
+        items: [
+          { id: 's1', title: 'Feature X', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+          { id: 's2', title: 'Feature Y', status: 'idle', metadata: { cwd: '/other' }, agent_config: {}, last_seq: 0 },
+        ],
+      }));
+      const kimi = makeKimi({ listSessions });
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+      const result = await handlers.kimi_find_recent_session({ titleContains: 'feature', cwd: '/repo', matchAnyCwd: true });
+
+      expect(result.match?.sessionId).toBe('s1');
+      expect(result.candidates.map((c) => c.sessionId)).toEqual(['s1', 's2']);
+    });
+
+    it('redacts token-like values in query.cwd and candidate cwd', async () => {
+      const listSessions = vi.fn(async () => ({
+        items: [
+          { id: 's1', title: 'Feature X', status: 'idle', metadata: { cwd: '/repo/#token=secret config-secret' }, agent_config: {}, last_seq: 0 },
+        ],
+      }));
+      const kimi = makeKimi({ listSessions });
+      const handlers = createToolHandlers({
+        kimi: kimi as never,
+        config: makeConfig({ serverToken: 'config-secret' }),
+        preflight: makePreflight(),
+      });
+
+      const result = await handlers.kimi_find_recent_session({
+        titleContains: 'feature',
+        cwd: '/repo/#token=secret config-secret',
+      });
+
+      expect(JSON.stringify(result)).not.toContain('secret');
+      expect(JSON.stringify(result)).not.toContain('config-secret');
+      expect(result.query.cwd).toBe('/repo/#token=[redacted] [redacted]');
+      expect(result.match?.cwd).toBe('/repo/#token=[redacted] [redacted]');
+      expect(result.candidates[0].cwd).toBe('/repo/#token=[redacted] [redacted]');
+    });
   });
 });

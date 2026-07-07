@@ -114,6 +114,7 @@ export async function main(): Promise<void> {
         includeArchive: z.boolean().optional(),
         excludeEmpty: z.boolean().optional(),
         reuseIfStatus: z.array(z.string()).optional(),
+        matchAnyCwd: z.boolean().optional(),
       }).optional(),
     },
     async (input) => runToolHandler(() => handlers.kimi_delegate_and_wait(input)),
@@ -200,6 +201,8 @@ export async function main(): Promise<void> {
       pageSize: z.number().optional(),
       includeArchive: z.boolean().optional(),
       excludeEmpty: z.boolean().optional(),
+      cwd: z.string().optional(),
+      matchAnyCwd: z.boolean().optional(),
     },
     async (input) => runToolHandler(() => handlers.kimi_find_recent_session(input)),
   );
