@@ -168,14 +168,16 @@ kimi-delegate@codex-kimi-bridge-local  installed, enabled  0.1.0
 - `kimi_delegate_and_wait` returns an embedded `reviewPackage` on idle results.
 - `kimi_review_package` can re-fetch review material for an existing session before commit.
 - Delegate/continue responses include Kimi Web session URLs.
+- `kimi_recent_sessions` and `kimi_find_recent_session` can recover interrupted or duplicate sessions.
+- `kimi_delegate_and_wait.dedupe` prevents duplicate sessions, defaults to cwd-safe matching, and can include cleaned session summaries for recovery decisions.
+- Session summaries skip internal reminder/control messages and redact token-like values.
 - Handoff expands untracked directories into concrete file paths when possible.
 - End-to-end smoke test passed: Codex delegated a file creation to Kimi, read handoff/diff, reviewed the result, then delegated cleanup.
 
 ## Good Next Tasks
 
-Prefer testing this bridge with a real small feature before adding more abstractions. If optimizing further, useful candidates are:
+Prefer using this bridge on a real external repo/task before adding more abstractions. If optimizing further, useful candidates are:
 
-- Add a higher-level Codex prompt template for spec/plan/delegate/review loops.
 - Improve status output if real usage reveals confusing diagnostics.
 - Add more integration tests around real Kimi server API shape when safe.
 - Consider packaging the plugin more portably instead of using an absolute `dist/index.js` path.

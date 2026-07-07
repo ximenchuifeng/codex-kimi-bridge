@@ -8,7 +8,10 @@ Use this short prompt for normal work:
 
 ```text
 用 kimi-delegate 实现这个需求：<需求内容>
-Codex 负责 spec/plan/review，Kimi 负责实现。通过后提交并重装插件。
+Codex 负责 spec/plan/review，Kimi 负责实现。
+委托时请使用 kimi_delegate_and_wait，并设置 dedupe.titleContains 为稳定关键词；默认保持 cwd-safe，不要开启 matchAnyCwd。
+如果是中断恢复、额度恢复或疑似重复任务，请设置 includeSummary: true 辅助判断旧 session。
+通过后提交并重装插件。
 ```
 
 Use this fuller prompt when the task is important or needs strict boundaries:
@@ -19,7 +22,7 @@ Use this fuller prompt when the task is important or needs strict boundaries:
 你是主控 Codex，负责：
 1. 理解需求
 2. 生成 spec / plan / acceptance criteria
-3. 调用 kimi_delegate_and_wait 委托 Kimi 实现
+3. 调用 kimi_delegate_and_wait 委托 Kimi 实现，并默认使用 cwd-safe dedupe
 4. 使用返回的 reviewPackage 复核 Kimi 的改动
 5. 独立运行验证命令
 6. 如果不通过，用 kimi_continue_task 让 Kimi 修复
@@ -32,6 +35,9 @@ Use this fuller prompt when the task is important or needs strict boundaries:
 - 不要改 Codex 插件安装机制，除非我明确要求
 - 不要泄露 token
 - 不要跳过验证
+- 委托时为 dedupe.titleContains 选择一个稳定且足够具体的关键词
+- 默认不要设置 matchAnyCwd；只有我明确要求跨 workspace 恢复 session 时才开启
+- 中断恢复、额度恢复、疑似重复任务时开启 includeSummary: true，并根据 summary / cwd / status 判断是否复用
 
 需求：
 <这里写你的需求>
@@ -41,12 +47,49 @@ Use this fuller prompt when the task is important or needs strict boundaries:
 
 完成后告诉我：
 1. Kimi sessionId / webUrl
-2. 修改文件列表
-3. reviewPackage 摘要
-4. 验证结果
-5. commit hash
-6. 是否需要我重启 Codex
+2. dedupe 是否命中 / 是否复用 / reason
+3. 修改文件列表
+4. reviewPackage 摘要
+5. 验证结果
+6. commit hash
+7. 是否需要我重启 Codex
 ```
+
+## Recommended Codex Delegation Shape
+
+For normal implementation work, Codex should call `kimi_delegate_and_wait` with a stable dedupe key:
+
+```json
+{
+  "cwd": "<workspace>",
+  "task": "<short task title used as the Kimi session title>",
+  "acceptanceCriteria": ["..."],
+  "plan": ["..."],
+  "timeoutMs": 120000,
+  "dedupe": {
+    "titleContains": "<stable unique substring from task title>",
+    "pageSize": 20,
+    "excludeEmpty": true,
+    "reuseIfStatus": ["running", "idle", "awaiting_approval", "awaiting_question"]
+  }
+}
+```
+
+For interruption recovery, quota recovery, or suspected duplicate tasks, add `includeSummary: true`:
+
+```json
+{
+  "dedupe": {
+    "titleContains": "<stable unique substring from task title>",
+    "pageSize": 20,
+    "excludeEmpty": true,
+    "includeSummary": true,
+    "reuseIfStatus": ["running", "idle", "awaiting_approval", "awaiting_question"]
+  }
+}
+```
+
+Keep `matchAnyCwd` omitted for daily use. Only set `matchAnyCwd: true` when intentionally recovering a session from another workspace.
 
 ## Codex To Kimi
 
@@ -83,7 +126,8 @@ Codex should shape delegated work like this:
 4. 关键 diff 摘要
 5. 是否偏离 plan
 6. 已知风险 / 后续建议
-7. 等待 Codex 复核
+7. 如果遇到阻塞、额度、approval、question 或中断，请明确说明状态和建议继续方式
+8. 等待 Codex 复核
 ```
 
 ## Preferred Tool Flow
