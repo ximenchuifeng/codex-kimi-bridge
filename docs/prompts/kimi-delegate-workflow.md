@@ -89,7 +89,7 @@ Codex should shape delegated work like this:
 ## Preferred Tool Flow
 
 1. Call `kimi_bridge_status` when diagnosing readiness.
-2. If a previous delegate was interrupted, or you suspect a duplicate/running/aborted session, call `kimi_recent_sessions` first and inspect `status`, `title`, and `webUrl` before delegating again.
+2. If a previous delegate was interrupted, or you suspect a duplicate/running/aborted session, call `kimi_find_recent_session` (search by title) or `kimi_recent_sessions` first and inspect `status`, `title`, and `webUrl` before delegating again.
 3. Call `kimi_delegate_and_wait` for normal implementation work.
 4. If `wait.status` is `idle`, review the embedded `reviewPackage`.
 5. If `wait.status` is `timeout`, keep `sessionId` and call `kimi_wait_until_idle` later.

@@ -856,4 +856,224 @@ describe('tool handlers', () => {
 
     expect(JSON.stringify(result)).not.toContain('super-secret-token');
   });
+
+  it('preflights before finding a recent session by title', async () => {
+    const preflight = makePreflight();
+    const handlers = createToolHandlers({ kimi: makeKimi(), config: makeConfig(), preflight });
+
+    await handlers.kimi_find_recent_session({ titleContains: 'feature' });
+
+    expect(preflight.ensureReady).toHaveBeenCalled();
+  });
+
+  it('throws a clear error when titleContains is empty after trimming', async () => {
+    const handlers = createToolHandlers({ kimi: makeKimi(), config: makeConfig(), preflight: makePreflight() });
+
+    await expect(handlers.kimi_find_recent_session({ titleContains: '' })).rejects.toThrow(/titleContains/);
+    await expect(handlers.kimi_find_recent_session({ titleContains: '   ' })).rejects.toThrow(/titleContains/);
+  });
+
+  it('finds sessions case-insensitively', async () => {
+    const kimi = makeKimi({
+      listSessions: vi.fn(async () => ({
+        items: [
+          { id: 's1', title: 'Implement Feature X', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+        ],
+      })),
+    });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    const result = await handlers.kimi_find_recent_session({ titleContains: 'feature' });
+
+    expect(result.match?.sessionId).toBe('s1');
+    expect(result.candidates).toHaveLength(1);
+  });
+
+  it('returns the first match and all candidates in server order', async () => {
+    const kimi = makeKimi({
+      listSessions: vi.fn(async () => ({
+        items: [
+          { id: 's2', title: 'Another feature task', status: 'running', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+          { id: 's1', title: 'Implement Feature X', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+          { id: 's3', title: 'Feature fix', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+        ],
+      })),
+    });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    const result = await handlers.kimi_find_recent_session({ titleContains: 'feature' });
+
+    expect(result.match?.sessionId).toBe('s2');
+    expect(result.candidates.map((c) => c.sessionId)).toEqual(['s2', 's1', 's3']);
+  });
+
+  it('uses default pageSize 20 and passes through optional filters', async () => {
+    const listSessions = vi.fn(async () => ({ items: [] }));
+    const kimi = makeKimi({ listSessions });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    await handlers.kimi_find_recent_session({ titleContains: 'x' });
+
+    expect(listSessions).toHaveBeenCalledWith({ pageSize: 20 });
+
+    await handlers.kimi_find_recent_session({
+      titleContains: 'x',
+      pageSize: 50,
+      status: 'running',
+      includeArchive: true,
+      excludeEmpty: true,
+    });
+
+    expect(listSessions).toHaveBeenLastCalledWith({
+      pageSize: 50,
+      status: 'running',
+      includeArchive: true,
+      excludeEmpty: true,
+    });
+  });
+
+  it('omits match and returns empty candidates with suggestions when nothing matches', async () => {
+    const kimi = makeKimi({
+      listSessions: vi.fn(async () => ({
+        items: [
+          { id: 's1', title: 'Unrelated task', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+        ],
+      })),
+    });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    const result = await handlers.kimi_find_recent_session({ titleContains: 'missing' });
+
+    expect(result.match).toBeUndefined();
+    expect(result.candidates).toEqual([]);
+    expect(result.query.titleContains).toBe('missing');
+    expect(result.suggestedNextActions.some((a: string) => a.includes('kimi_recent_sessions'))).toBe(true);
+    expect(result.suggestedNextActions.some((a: string) => a.includes('放宽')) || result.suggestedNextActions.some((a: string) => a.includes('widen'))).toBe(true);
+  });
+
+  it('suggests waiting or opening webUrl when the matched session is running', async () => {
+    const kimi = makeKimi({
+      listSessions: vi.fn(async () => ({
+        items: [
+          { id: 's1', title: 'Feature', status: 'running', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+        ],
+      })),
+    });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    const result = await handlers.kimi_find_recent_session({ titleContains: 'feature' });
+
+    expect(result.match?.status).toBe('running');
+    expect(result.suggestedNextActions.some((a: string) => a.includes('kimi_wait_until_idle'))).toBe(true);
+    expect(result.suggestedNextActions.some((a: string) => a.includes(result.match?.webUrl ?? ''))).toBe(true);
+  });
+
+  it('suggests review package or opening webUrl when the matched session is idle', async () => {
+    const kimi = makeKimi({
+      listSessions: vi.fn(async () => ({
+        items: [
+          { id: 's1', title: 'Feature', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+        ],
+      })),
+    });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    const result = await handlers.kimi_find_recent_session({ titleContains: 'feature' });
+
+    expect(result.match?.status).toBe('idle');
+    expect(result.suggestedNextActions.some((a: string) => a.includes('kimi_review_package'))).toBe(true);
+    expect(result.suggestedNextActions.some((a: string) => a.includes(result.match?.webUrl ?? ''))).toBe(true);
+  });
+
+  it('suggests continuing or opening webUrl when the matched session is aborted', async () => {
+    const kimi = makeKimi({
+      listSessions: vi.fn(async () => ({
+        items: [
+          { id: 's1', title: 'Feature', status: 'aborted', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+        ],
+      })),
+    });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    const result = await handlers.kimi_find_recent_session({ titleContains: 'feature' });
+
+    expect(result.match?.status).toBe('aborted');
+    expect(result.suggestedNextActions.some((a: string) => a.includes('kimi_continue_task'))).toBe(true);
+    expect(result.suggestedNextActions.some((a: string) => a.includes(result.match?.webUrl ?? ''))).toBe(true);
+  });
+
+  it('suggests resolving approval/question when the matched session is blocked', async () => {
+    const kimi = makeKimi({
+      listSessions: vi.fn(async (input: { status?: string }) => {
+        const all = [
+          { id: 's1', title: 'Feature', status: 'awaiting_approval', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+          { id: 's2', title: 'Feature', status: 'awaiting_question', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+        ];
+        const items = input.status ? all.filter((s) => s.status === input.status) : all;
+        return { items };
+      }),
+    });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    const approvalResult = await handlers.kimi_find_recent_session({ titleContains: 'feature', status: 'awaiting_approval' });
+    expect(approvalResult.match?.status).toBe('awaiting_approval');
+    expect(approvalResult.suggestedNextActions.some((a: string) => a.includes('approval') || a.includes('审批'))).toBe(true);
+
+    const questionResult = await handlers.kimi_find_recent_session({ titleContains: 'feature', status: 'awaiting_question' });
+    expect(questionResult.match?.status).toBe('awaiting_question');
+    expect(questionResult.suggestedNextActions.some((a: string) => a.includes('question') || a.includes('问题'))).toBe(true);
+  });
+
+  it('redacts token-like values in find result match and candidates', async () => {
+    const kimi = makeKimi({
+      listSessions: vi.fn(async () => ({
+        items: [
+          { id: 's1', title: 'open http://127.0.0.1:58627/#token=super-secret-token', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+          { id: 's2', title: 'open http://127.0.0.1:58627/?token=another-secret&x=1', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+        ],
+      })),
+    });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    const result = await handlers.kimi_find_recent_session({ titleContains: 'open' });
+
+    expect(JSON.stringify(result)).not.toContain('super-secret-token');
+    expect(JSON.stringify(result)).not.toContain('another-secret');
+    expect(result.match?.title).toContain('#token=[redacted]');
+  });
+
+  it('does not leak bridge config token in find result', async () => {
+    const kimi = makeKimi({
+      listSessions: vi.fn(async () => ({
+        items: [
+          { id: 's1', title: 'Task', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+        ],
+      })),
+    });
+    const handlers = createToolHandlers({
+      kimi: kimi as never,
+      config: makeConfig({ serverToken: 'config-secret' }),
+      preflight: makePreflight(),
+    });
+
+    const result = await handlers.kimi_find_recent_session({ titleContains: 'task' });
+
+    expect(JSON.stringify(result)).not.toContain('config-secret');
+  });
+
+  it('redacts token-like query text when find has no matches', async () => {
+    const handlers = createToolHandlers({
+      kimi: makeKimi(),
+      config: makeConfig({ serverToken: 'config-secret' }),
+      preflight: makePreflight(),
+    });
+
+    const result = await handlers.kimi_find_recent_session({
+      titleContains: 'http://127.0.0.1:58627/#token=query-secret config-secret',
+    });
+
+    expect(JSON.stringify(result)).not.toContain('query-secret');
+    expect(JSON.stringify(result)).not.toContain('config-secret');
+    expect(result.query.titleContains).toBe('http://127.0.0.1:58627/#token=[redacted] [redacted]');
+  });
 });

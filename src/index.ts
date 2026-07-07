@@ -184,6 +184,18 @@ export async function main(): Promise<void> {
     async (input) => runToolHandler(() => handlers.kimi_recent_sessions(input)),
   );
 
+  server.tool(
+    'kimi_find_recent_session',
+    {
+      titleContains: z.string(),
+      status: z.string().optional(),
+      pageSize: z.number().optional(),
+      includeArchive: z.boolean().optional(),
+      excludeEmpty: z.boolean().optional(),
+    },
+    async (input) => runToolHandler(() => handlers.kimi_find_recent_session(input)),
+  );
+
   await server.connect(new StdioServerTransport());
 }
 

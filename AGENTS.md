@@ -103,6 +103,7 @@ Use these from Codex when the plugin is loaded:
 
 - `kimi_bridge_status`: live read-only diagnostics; does not auto-start, refresh token, or update cache.
 - `kimi_recent_sessions`: list recent Kimi sessions; use this first when a previous delegate was interrupted or you suspect a duplicate/running/aborted session.
+- `kimi_find_recent_session`: find a recent Kimi session by title substring; preferred when recovering from an interruption, quota recovery, or suspected duplicate task.
 - `kimi_delegate_task`: start a Kimi task from a Codex spec/plan.
 - `kimi_delegate_and_wait`: preferred one-call flow; delegates, waits, and returns `reviewPackage` when idle.
 - `kimi_wait_until_idle`: wait for Kimi to finish or report approval/question blocking.
@@ -116,7 +117,7 @@ Delegate and review tools return `webUrl`, which can be opened in Kimi Web to wa
 
 ## Handling interrupted or duplicate sessions
 
-If a previous `kimi_delegate_and_wait` was interrupted (for example, by pressing Esc), or if you are unsure whether a task is already running, call `kimi_recent_sessions` first. Check the returned `status`, `title`, and `webUrl` to decide whether to continue an existing session (`kimi_continue_task`), wait for it (`kimi_wait_until_idle`), or abort it (`kimi_abort`). Do not blindly start a new `kimi_delegate_task` before confirming there is no orphaned or duplicate session.
+If a previous `kimi_delegate_and_wait` was interrupted (for example, by pressing Esc), or if you are unsure whether a task is already running, call `kimi_find_recent_session` (when you remember part of the title) or `kimi_recent_sessions` first. Check the returned `status`, `title`, and `webUrl` to decide whether to continue an existing session (`kimi_continue_task`), wait for it (`kimi_wait_until_idle`), or abort it (`kimi_abort`). Do not blindly start a new `kimi_delegate_task` before confirming there is no orphaned or duplicate session.
 
 ## Verification Commands
 

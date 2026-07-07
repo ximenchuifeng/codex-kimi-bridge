@@ -172,7 +172,35 @@ The response contains an `items` array. Each item includes:
 
 No token or authorization information is returned.
 
-If you suspect a duplicate or still-running session, call `kimi_recent_sessions` first and check the `status` and `webUrl` instead of blindly starting another `kimi_delegate_task`.
+If you suspect a duplicate or still-running session, call `kimi_find_recent_session` or `kimi_recent_sessions` first and check the `status` and `webUrl` instead of blindly starting another `kimi_delegate_task`.
+
+### Find a recent session by title
+
+Use `kimi_find_recent_session` when you want to recover a session after an interruption (for example, pressing Esc), quota recovery, or when you suspect a duplicate task. It searches recent Kimi sessions by a substring of the session title.
+
+Input fields:
+
+- `titleContains` *(required)*: substring to search for in session titles. Case-insensitive. Leading/trailing whitespace is trimmed; an empty or whitespace-only value returns a clear error.
+- `status`: filter by session status such as `idle`, `running`, `awaiting_approval`, `awaiting_question`, or `aborted`.
+- `pageSize`: number of recent sessions to inspect. Default: `20`.
+- `includeArchive`: include archived sessions.
+- `excludeEmpty`: exclude sessions with no messages.
+
+The response contains:
+
+- `query`: the normalized query that was executed.
+- `match`: the first matching session, if any.
+- `candidates`: all matching sessions, in the order returned by the Kimi server.
+- `suggestedNextActions`: guidance based on the matched session status, or suggestions to widen the keyword or call `kimi_recent_sessions` when nothing matches.
+
+Status-based guidance:
+
+- `running`: wait with `kimi_wait_until_idle` or open the `webUrl`.
+- `idle`: call `kimi_review_package` or open the `webUrl`.
+- `aborted`: open the `webUrl` to inspect the reason, then use `kimi_continue_task` if needed.
+- `awaiting_approval` / `awaiting_question`: resolve the approval or question in Kimi Web, then continue waiting.
+
+No token or authorization information is returned.
 
 ### One-call delegate and wait
 

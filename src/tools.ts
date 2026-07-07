@@ -74,6 +74,21 @@ export interface RecentSessionsInput {
   excludeEmpty?: boolean;
 }
 
+export interface FindRecentSessionInput {
+  titleContains: string;
+  status?: string;
+  pageSize?: number;
+  includeArchive?: boolean;
+  excludeEmpty?: boolean;
+}
+
+export interface FindRecentSessionResult {
+  query: Omit<FindRecentSessionInput, 'titleContains'> & { titleContains: string };
+  match?: RecentSession;
+  candidates: RecentSession[];
+  suggestedNextActions: string[];
+}
+
 export interface RecentSessionsResult {
   items: RecentSession[];
 }
@@ -123,6 +138,7 @@ export interface ToolHandlers {
   kimi_abort: (input: AbortInput) => Promise<{ sessionId: string; aborted: true }>;
   kimi_bridge_status: () => Promise<BridgeStatus>;
   kimi_recent_sessions: (input: RecentSessionsInput) => Promise<RecentSessionsResult>;
+  kimi_find_recent_session: (input: FindRecentSessionInput) => Promise<FindRecentSessionResult>;
 }
 
 function withPreflight<T extends unknown[], R>(
@@ -166,6 +182,42 @@ function buildRecentSession(serverUrl: string, session: WireSession & { created_
     ...(session.created_at ? { createdAt: session.created_at } : {}),
     ...(session.updated_at ? { updatedAt: session.updated_at } : {}),
   };
+}
+
+function buildFindSuggestions(match: RecentSession): string[] {
+  switch (match.status) {
+    case 'running':
+      return [
+        `找到正在运行的 session ${match.sessionId}。`,
+        `调用 kimi_wait_until_idle 继续等待，或在浏览器中打开 ${match.webUrl} 查看实时进度。`,
+      ];
+    case 'idle':
+      return [
+        `找到已空闲的 session ${match.sessionId}。`,
+        `调用 kimi_review_package 获取 review package，或在浏览器中打开 ${match.webUrl} 查看结果。`,
+      ];
+    case 'aborted':
+      return [
+        `找到已中断的 session ${match.sessionId}。`,
+        `在浏览器中打开 ${match.webUrl} 查看中断原因。`,
+        '必要时使用 kimi_continue_task 继续旧 session，而不是直接重新 delegate。',
+      ];
+    case 'awaiting_approval':
+      return [
+        `找到等待审批的 session ${match.sessionId}。`,
+        `在浏览器中打开 ${match.webUrl} 处理 approval，处理后继续等待或调用 kimi_wait_until_idle。`,
+      ];
+    case 'awaiting_question':
+      return [
+        `找到等待回答的 session ${match.sessionId}。`,
+        `在浏览器中打开 ${match.webUrl} 回答问题，处理后继续等待或调用 kimi_wait_until_idle。`,
+      ];
+    default:
+      return [
+        `找到 session ${match.sessionId}，状态为 ${match.status}。`,
+        `在浏览器中打开 ${match.webUrl} 查看详情。`,
+      ];
+  }
 }
 
 const MESSAGE_TRUNCATION_LIMIT = 1000;
@@ -290,6 +342,49 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
       });
       return {
         items: result.items.map((session) => buildRecentSession(deps.config.serverUrl, session)),
+      };
+    },
+
+    async kimi_find_recent_session(input: FindRecentSessionInput) {
+      const titleContains = input.titleContains.trim();
+      if (titleContains.length === 0) {
+        throw new Error('titleContains 不能为空或仅包含空白字符。');
+      }
+      const safeTitleContains = sanitizeDiagnosticText(titleContains, deps.config.serverToken);
+
+      const result = await deps.kimi.listSessions({
+        pageSize: input.pageSize ?? 20,
+        status: input.status,
+        includeArchive: input.includeArchive,
+        excludeEmpty: input.excludeEmpty,
+      });
+
+      const normalizedQuery = titleContains.toLowerCase();
+      const candidates = result.items
+        .filter((session) => session.title.toLowerCase().includes(normalizedQuery))
+        .map((session) => buildRecentSession(deps.config.serverUrl, session));
+
+      const match = candidates[0];
+
+      const suggestedNextActions = match
+        ? buildFindSuggestions(match)
+        : [
+            `未找到标题包含 "${safeTitleContains}" 的 session。`,
+            '尝试放宽关键词（例如去掉日期、版本号），或调用 kimi_recent_sessions 查看最近 session 列表。',
+            '确认无重复/遗留 session 后再新建任务，避免直接重新 delegate 造成重复。',
+          ];
+
+      return {
+        query: {
+          titleContains: safeTitleContains,
+          ...(input.status !== undefined ? { status: input.status } : {}),
+          ...(input.pageSize !== undefined ? { pageSize: input.pageSize } : {}),
+          ...(input.includeArchive !== undefined ? { includeArchive: input.includeArchive } : {}),
+          ...(input.excludeEmpty !== undefined ? { excludeEmpty: input.excludeEmpty } : {}),
+        },
+        candidates,
+        ...(match ? { match } : {}),
+        suggestedNextActions,
       };
     },
 
@@ -439,5 +534,6 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
     kimi_get_diff: withPreflight(deps.preflight, handlers.kimi_get_diff),
     kimi_abort: withPreflight(deps.preflight, handlers.kimi_abort),
     kimi_recent_sessions: withPreflight(deps.preflight, handlers.kimi_recent_sessions),
+    kimi_find_recent_session: withPreflight(deps.preflight, handlers.kimi_find_recent_session),
   };
 }
