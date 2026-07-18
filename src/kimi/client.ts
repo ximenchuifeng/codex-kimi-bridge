@@ -10,6 +10,7 @@ export interface HttpPort {
 export interface CreateSessionInput {
   cwd: string;
   title?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface SubmitPromptInput {
@@ -53,7 +54,10 @@ export class KimiClient {
   async createSession(input: CreateSessionInput): Promise<RuntimeSession> {
     const session = await this.http.post<WireSession>('/sessions', {
       ...(input.title ? { title: input.title } : {}),
-      metadata: { cwd: input.cwd },
+      metadata: {
+        ...input.metadata,
+        cwd: input.cwd,
+      },
     });
     return normalizeSession(session);
   }

@@ -1,4 +1,4 @@
-import { createServer, type Server } from 'node:http';
+import { createServer, type Server, type IncomingMessage } from 'node:http';
 
 export interface FakeKimiServer {
   url: string;
@@ -9,8 +9,17 @@ function envelope(data: unknown): string {
   return JSON.stringify({ code: 0, msg: 'ok', data, request_id: 'req_fake' });
 }
 
+function readBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  });
+}
+
 export async function startFakeKimiServer(): Promise<FakeKimiServer> {
-  const session = {
+  const baseSession = {
     id: 's1',
     workspace_id: 'workspace_1',
     title: 'test',
@@ -38,10 +47,18 @@ export async function startFakeKimiServer(): Promise<FakeKimiServer> {
     last_seq: 1,
   };
 
-  const server = createServer((req, res) => {
+  let currentSession = { ...baseSession };
+
+  const server = createServer(async (req, res) => {
     res.setHeader('content-type', 'application/json');
     if (req.method === 'POST' && req.url === '/api/v1/sessions') {
-      res.end(envelope(session));
+      const body = JSON.parse(await readBody(req));
+      currentSession = {
+        ...baseSession,
+        ...(body.title ? { title: body.title } : {}),
+        metadata: { ...baseSession.metadata, ...body.metadata },
+      };
+      res.end(envelope(currentSession));
       return;
     }
     if (req.method === 'POST' && req.url === '/api/v1/sessions/s1/prompts') {
@@ -57,7 +74,7 @@ export async function startFakeKimiServer(): Promise<FakeKimiServer> {
       return;
     }
     if (req.method === 'GET' && req.url === '/api/v1/sessions/s1') {
-      res.end(envelope(session));
+      res.end(envelope(currentSession));
       return;
     }
     if (req.method === 'GET' && req.url === '/api/v1/sessions/s1/status') {

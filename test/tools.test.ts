@@ -3,6 +3,7 @@ import { createToolHandlers } from '../src/tools.js';
 import type { KimiClient } from '../src/kimi/client.js';
 import type { BridgeConfig } from '../src/config.js';
 import type { KimiPreflight } from '../src/preflight.js';
+import type { GitInspector } from '../src/git.js';
 
 function makeKimi(overrides: Record<string, unknown> = {}): KimiClient {
   return {
@@ -59,6 +60,25 @@ function makePreflight(overrides: Partial<import('../src/preflight.js').BridgeSt
       ...overrides,
     })),
   } as unknown as KimiPreflight;
+}
+
+function makeGitInspector(result: import('../src/git.js').BaselineCaptureResult): GitInspector {
+  return {
+    captureBaseline: vi.fn(async () => result),
+    collectCommittedChanges: vi.fn(async () => ({
+      baseCommit: undefined,
+      headCommit: undefined,
+      commits: [],
+      changeSet: {
+        available: false,
+        changedFiles: [],
+        additions: 0,
+        deletions: 0,
+        diffs: [],
+        unavailableReason: 'baseline_unavailable',
+      },
+    })),
+  } as unknown as GitInspector;
 }
 
 describe('tool handlers', () => {
@@ -2169,6 +2189,120 @@ describe('tool handlers', () => {
         lastAssistantMessage: 'other cwd',
       });
       expect(listMessages).toHaveBeenCalledWith('s2');
+    });
+  });
+
+  describe('baseline persistence on new sessions', () => {
+    it('persists baseline metadata when creating a new session', async () => {
+      const createSession = vi.fn(async () => ({ id: 's1' }));
+      const gitInspector = makeGitInspector({
+        available: true,
+        baseline: {
+          schemaVersion: 1,
+          baseCommit: 'a'.repeat(40),
+          baseBranch: 'main',
+          initialDirtyPaths: ['src/dirty.ts'],
+        },
+      });
+      const kimi = makeKimi({ createSession });
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight(), gitInspector });
+
+      await handlers.kimi_delegate_task({
+        cwd: '/repo',
+        task: 'implement x',
+        acceptanceCriteria: ['passes tests'],
+        plan: ['edit code'],
+      });
+
+      expect(gitInspector.captureBaseline).toHaveBeenCalledWith('/repo');
+      expect(createSession).toHaveBeenCalledWith({
+        cwd: '/repo',
+        title: 'implement x',
+        metadata: {
+          codex_kimi_bridge: {
+            schema_version: 1,
+            base_commit: 'a'.repeat(40),
+            base_branch: 'main',
+            initial_dirty_paths: ['src/dirty.ts'],
+          },
+        },
+      });
+    });
+
+    it('delegates without bridge metadata when baseline capture fails', async () => {
+      const createSession = vi.fn(async () => ({ id: 's1' }));
+      const gitInspector = makeGitInspector({
+        available: false,
+        unavailableReason: 'not_a_git_repository',
+      });
+      const kimi = makeKimi({ createSession });
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight(), gitInspector });
+
+      await handlers.kimi_delegate_task({
+        cwd: '/repo',
+        task: 'implement x',
+        acceptanceCriteria: ['passes tests'],
+        plan: ['edit code'],
+      });
+
+      expect(createSession).toHaveBeenCalledWith({
+        cwd: '/repo',
+        title: 'implement x',
+      });
+    });
+
+    it('skips baseline capture and session creation when sessionId is supplied', async () => {
+      const createSession = vi.fn(async () => ({ id: 's1' }));
+      const captureBaseline = vi.fn(async () => ({
+        available: true as const,
+        baseline: { schemaVersion: 1 as const, baseCommit: 'a'.repeat(40), initialDirtyPaths: [] },
+      }));
+      const gitInspector = { captureBaseline, collectCommittedChanges: vi.fn() } as unknown as GitInspector;
+      const kimi = makeKimi({ createSession });
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight(), gitInspector });
+
+      await handlers.kimi_delegate_task({
+        cwd: '/repo',
+        sessionId: 'existing-session',
+        task: 'continue x',
+        acceptanceCriteria: ['passes tests'],
+        plan: ['edit code'],
+      });
+
+      expect(captureBaseline).not.toHaveBeenCalled();
+      expect(createSession).not.toHaveBeenCalled();
+    });
+
+    it('skips baseline capture when a dedupe match is reused', async () => {
+      const createSession = vi.fn(async () => ({ id: 's1' }));
+      const captureBaseline = vi.fn(async () => ({
+        available: true as const,
+        baseline: { schemaVersion: 1 as const, baseCommit: 'a'.repeat(40), initialDirtyPaths: [] },
+      }));
+      const gitInspector = { captureBaseline, collectCommittedChanges: vi.fn() } as unknown as GitInspector;
+      const kimi = makeKimi({
+        createSession,
+        listSessions: vi.fn(async () => ({
+          items: [{ id: 's2', title: 'Feature X', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 }],
+        })),
+        getRuntimeStatus: vi.fn(async () => 'idle'),
+        listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done' }]),
+        getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 })),
+        getFileDiff: vi.fn(async () => ({ path: 'src/a.ts', diff: '@@ diff' })),
+        getSession: vi.fn(async () => ({ id: 's2', title: 'Feature X', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 })),
+      });
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight(), gitInspector });
+
+      await handlers.kimi_delegate_and_wait({
+        cwd: '/repo',
+        task: 'implement feature x',
+        acceptanceCriteria: ['tests pass'],
+        plan: ['edit code'],
+        dedupe: { titleContains: 'feature' },
+      });
+
+      expect(captureBaseline).not.toHaveBeenCalled();
+      expect(createSession).not.toHaveBeenCalled();
     });
   });
 });

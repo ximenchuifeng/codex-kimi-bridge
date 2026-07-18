@@ -12,6 +12,27 @@ describe('KimiClient', () => {
     expect(http.post).toHaveBeenCalledWith('/sessions', { title: 'Task', metadata: { cwd: '/repo' } });
   });
 
+  it('merges caller metadata and preserves cwd', async () => {
+    const http: HttpPort = {
+      post: vi.fn(async () => ({ id: 's1', status: 'idle', metadata: { cwd: '/repo' }, title: 'task', agent_config: {}, last_seq: 0 })) as HttpPort['post'],
+      get: vi.fn(),
+    };
+    const client = new KimiClient(http);
+    await client.createSession({
+      cwd: '/repo',
+      title: 'task',
+      metadata: { codex_kimi_bridge: { schema_version: 1, base_commit: 'a'.repeat(40) } },
+    });
+
+    expect(http.post).toHaveBeenCalledWith('/sessions', {
+      title: 'task',
+      metadata: {
+        codex_kimi_bridge: { schema_version: 1, base_commit: 'a'.repeat(40) },
+        cwd: '/repo',
+      },
+    });
+  });
+
   it('submits prompts with required runtime fields', async () => {
     const http: HttpPort = {
       post: vi.fn(async () => ({ prompt_id: 'p1', user_message_id: 'm1', status: 'running' })) as HttpPort['post'],

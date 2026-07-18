@@ -9,6 +9,7 @@ import type { BridgeRuntimeStatus, ListSessionsInput, RecentSession, RecentSessi
 import type { BridgeStatus, KimiPreflight } from './preflight.js';
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
+import { NodeGitInspector, type GitInspector, type GitBaseline } from './git.js';
 
 export interface FileLister {
   listFiles(baseDir: string, relativeDir: string): Promise<string[]>;
@@ -19,6 +20,7 @@ export interface ToolDeps {
   config: BridgeConfig;
   preflight: KimiPreflight;
   fileLister?: FileLister;
+  gitInspector?: GitInspector;
 }
 
 export interface DelegateTaskInput {
@@ -195,6 +197,17 @@ async function resolveModel(
 
 function buildWebUrl(serverUrl: string, sessionId: string): string {
   return `${serverUrl}/sessions/${encodeURIComponent(sessionId)}`;
+}
+
+function baselineMetadata(baseline: GitBaseline): Record<string, unknown> {
+  return {
+    codex_kimi_bridge: {
+      schema_version: 1,
+      base_commit: baseline.baseCommit,
+      ...(baseline.baseBranch ? { base_branch: baseline.baseBranch } : {}),
+      initial_dirty_paths: baseline.initialDirtyPaths,
+    },
+  };
 }
 
 function normalizeCwd(cwd: string | undefined): string | undefined {
@@ -457,6 +470,8 @@ const defaultFileLister: FileLister = {
 };
 
 export function createToolHandlers(deps: ToolDeps): ToolHandlers {
+  const gitInspector = deps.gitInspector ?? new NodeGitInspector();
+
   function buildReviewPackage(sessionId: string, handoff: KimiHandoff): ReviewPackageResult {
     const diffsWithContent = handoff.diffs.filter((d) => d.diff.length > 0).length;
     return {
@@ -552,9 +567,21 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
     },
 
     async kimi_delegate_task(input: DelegateTaskInput) {
-      const session = input.sessionId
-        ? { id: input.sessionId }
-        : await deps.kimi.createSession({ cwd: input.cwd, title: input.task.slice(0, 80) });
+      let session: { id: string };
+      if (input.sessionId) {
+        session = { id: input.sessionId };
+      } else {
+        let metadata: Record<string, unknown> | undefined;
+        try {
+          const baselineResult = await gitInspector.captureBaseline(input.cwd);
+          if (baselineResult.available) {
+            metadata = baselineMetadata(baselineResult.baseline);
+          }
+        } catch {
+          // Failure to inspect Git must not prevent delegation.
+        }
+        session = await deps.kimi.createSession({ cwd: input.cwd, title: input.task.slice(0, 80), metadata });
+      }
       const prompt = buildDelegationPrompt({
         task: input.task,
         acceptanceCriteria: input.acceptanceCriteria,

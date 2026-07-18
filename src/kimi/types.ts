@@ -65,6 +65,13 @@ export interface PendingQuestion {
   [key: string]: unknown;
 }
 
+export interface CodexKimiBridgeMetadata {
+  schema_version: 1;
+  base_commit: string;
+  base_branch?: string;
+  initial_dirty_paths: string[];
+}
+
 export interface ListSessionsInput {
   pageSize?: number;
   status?: string;
