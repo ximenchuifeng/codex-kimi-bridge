@@ -3228,8 +3228,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path2) {
-      let input = path2;
+    function removeDotSegments(path3) {
+      let input = path3;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -3481,8 +3481,8 @@ var require_schemes = __commonJS({
         wsComponent.secure = void 0;
       }
       if (wsComponent.resourceName) {
-        const [path2, query] = wsComponent.resourceName.split("?");
-        wsComponent.path = path2 && path2 !== "/" ? path2 : void 0;
+        const [path3, query] = wsComponent.resourceName.split("?");
+        wsComponent.path = path3 && path3 !== "/" ? path3 : void 0;
         wsComponent.query = query;
         wsComponent.resourceName = void 0;
       }
@@ -7366,8 +7366,8 @@ function getErrorMap() {
 
 // ../../node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/helpers/parseUtil.js
 var makeIssue = (params) => {
-  const { data, path: path2, errorMaps, issueData } = params;
-  const fullPath = [...path2, ...issueData.path || []];
+  const { data, path: path3, errorMaps, issueData } = params;
+  const fullPath = [...path3, ...issueData.path || []];
   const fullIssue = {
     ...issueData,
     path: fullPath
@@ -7483,11 +7483,11 @@ var errorUtil;
 
 // ../../node_modules/.pnpm/zod@3.25.76/node_modules/zod/v3/types.js
 var ParseInputLazyPath = class {
-  constructor(parent, value, path2, key) {
+  constructor(parent, value, path3, key) {
     this._cachedPath = [];
     this.parent = parent;
     this.data = value;
-    this._path = path2;
+    this._path = path3;
     this._key = key;
   }
   get path() {
@@ -11124,10 +11124,10 @@ function assignProp(target, prop, value) {
     configurable: true
   });
 }
-function getElementAtPath(obj, path2) {
-  if (!path2)
+function getElementAtPath(obj, path3) {
+  if (!path3)
     return obj;
-  return path2.reduce((acc, key) => acc?.[key], obj);
+  return path3.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -11447,11 +11447,11 @@ function aborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path2, issues) {
+function prefixIssues(path3, issues) {
   return issues.map((iss) => {
     var _a;
     (_a = iss).path ?? (_a.path = []);
-    iss.path.unshift(path2);
+    iss.path.unshift(path3);
     return iss;
   });
 }
@@ -21205,14 +21205,14 @@ var KimiHttpClient = class {
   setServerToken(token) {
     this.serverToken = token;
   }
-  async get(path2, query) {
-    return this.request("GET", path2, void 0, query);
+  async get(path3, query) {
+    return this.request("GET", path3, void 0, query);
   }
-  async post(path2, body) {
-    return this.request("POST", path2, body);
+  async post(path3, body) {
+    return this.request("POST", path3, body);
   }
-  async request(method, path2, body, query) {
-    const url = new URL(`${this.serverUrl}/api/v1${path2.startsWith("/") ? path2 : `/${path2}`}`);
+  async request(method, path3, body, query) {
+    const url = new URL(`${this.serverUrl}/api/v1${path3.startsWith("/") ? path3 : `/${path3}`}`);
     for (const [key, value] of Object.entries(query ?? {})) {
       if (value !== void 0) url.searchParams.set(key, String(value));
     }
@@ -21230,7 +21230,7 @@ var KimiHttpClient = class {
         signal: controller.signal
       });
     } catch (error2) {
-      throw new KimiNetworkError(`Network error calling ${method} ${path2}`, error2);
+      throw new KimiNetworkError(`Network error calling ${method} ${path3}`, error2);
     } finally {
       clearTimeout(timeout);
     }
@@ -21238,7 +21238,7 @@ var KimiHttpClient = class {
     try {
       bodyText = await response.text();
     } catch (error2) {
-      throw new KimiNetworkError(`Failed to read response body from ${method} ${path2}`, error2);
+      throw new KimiNetworkError(`Failed to read response body from ${method} ${path3}`, error2);
     }
     let parsed;
     try {
@@ -21260,7 +21260,7 @@ var KimiHttpClient = class {
     const envelope = parsed;
     if (!envelope || typeof envelope.code !== "number") {
       throw new KimiNetworkError(
-        `Failed to parse JSON response from ${method} ${path2}`,
+        `Failed to parse JSON response from ${method} ${path3}`,
         new SyntaxError("Response body is not a Kimi envelope")
       );
     }
@@ -21358,8 +21358,8 @@ var KimiClient = class {
   getGitStatus(sessionId) {
     return this.http.post(`/sessions/${encodeURIComponent(sessionId)}/fs:git_status`, {});
   }
-  getFileDiff(sessionId, path2) {
-    return this.http.post(`/sessions/${encodeURIComponent(sessionId)}/fs:diff`, { path: path2 });
+  getFileDiff(sessionId, path3) {
+    return this.http.post(`/sessions/${encodeURIComponent(sessionId)}/fs:diff`, { path: path3 });
   }
   abortSession(sessionId) {
     return this.http.post(`/sessions/${encodeURIComponent(sessionId)}:abort`);
@@ -21536,6 +21536,7 @@ function buildHandoff(input) {
     finalMessage,
     baseCommit: input.baseCommit,
     headCommit: input.headCommit,
+    reviewWorkspace: input.reviewWorkspace,
     commits: [...input.commits],
     initialDirtyPaths: [...input.initialDirtyPaths],
     committedChanges: committed,
@@ -21543,28 +21544,29 @@ function buildHandoff(input) {
     changedFiles,
     additions: committed.additions + working.additions,
     deletions: committed.deletions + working.deletions,
-    diffs
+    diffs,
+    committedDiagnostics: input.committedDiagnostics
   };
 }
 async function expandGitStatusEntries(input) {
-  const isUntrackedDir = input.isUntrackedDir ?? ((path2, status) => path2.endsWith("/") && status === "??");
+  const isUntrackedDir = input.isUntrackedDir ?? ((path3, status) => path3.endsWith("/") && status === "??");
   const expanded = /* @__PURE__ */ new Set();
-  for (const [path2, status] of Object.entries(input.entries)) {
-    if (isUntrackedDir(path2, status)) {
+  for (const [path3, status] of Object.entries(input.entries)) {
+    if (isUntrackedDir(path3, status)) {
       try {
-        const files = await input.listFiles(input.baseDir, path2);
+        const files = await input.listFiles(input.baseDir, path3);
         if (files.length === 0) {
-          expanded.add(path2);
+          expanded.add(path3);
         } else {
           for (const file of files) {
             expanded.add(file);
           }
         }
       } catch {
-        expanded.add(path2);
+        expanded.add(path3);
       }
     } else {
-      expanded.add(path2);
+      expanded.add(path3);
     }
   }
   return Array.from(expanded).sort();
@@ -21572,11 +21574,12 @@ async function expandGitStatusEntries(input) {
 
 // src/tools.ts
 import { readdir } from "node:fs/promises";
-import path from "node:path";
+import path2 from "node:path";
 
 // src/git.ts
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import path from "node:path";
 var execFileAsync = promisify(execFile);
 var OBJECT_ID_RE = /^[0-9a-fA-F]{40}$|^[0-9a-fA-F]{64}$/;
 function isBufferOutput(output) {
@@ -21594,16 +21597,36 @@ function parseNulStatus(buffer) {
       continue;
     }
     const status = entry.slice(0, 2);
-    const path2 = entry.slice(3);
+    const path3 = entry.slice(3);
     if (status[0] === "R" || status[0] === "C" || status[1] === "R" || status[1] === "C") {
-      entries.push({ status, path: path2 });
+      entries.push({ status, path: path3 });
       i += 2;
       continue;
     }
-    entries.push({ status, path: path2 });
+    entries.push({ status, path: path3 });
     i += 1;
   }
   return entries;
+}
+function parseWorktreeList(buffer) {
+  const text = buffer.toString("utf8");
+  const records = text.split("\0\0").filter((record2) => record2.length > 0);
+  const worktrees = [];
+  for (const record2 of records) {
+    let worktreePath;
+    let headCommit;
+    for (const line of record2.split("\0")) {
+      if (line.startsWith("worktree ")) {
+        worktreePath = line.slice("worktree ".length);
+      } else if (line.startsWith("HEAD ")) {
+        headCommit = line.slice("HEAD ".length);
+      }
+    }
+    if (worktreePath && headCommit && OBJECT_ID_RE.test(headCommit)) {
+      worktrees.push({ path: worktreePath, headCommit });
+    }
+  }
+  return worktrees;
 }
 var NodeGitInspector = class {
   timeoutMs;
@@ -21614,6 +21637,10 @@ var NodeGitInspector = class {
   }
   get metadataMaxBuffer() {
     return Math.max(this.maxOutputBytes, 1048576);
+  }
+  normalizeWorktreePath(p) {
+    const normalized = path.normalize(p);
+    return normalized.endsWith("/") && normalized.length > 1 ? normalized.slice(0, -1) : normalized;
   }
   async git(cwd, args, maxBuffer) {
     const result = await execFileAsync("git", ["-C", cwd, ...args], {
@@ -21657,14 +21684,58 @@ var NodeGitInspector = class {
         initialDirtyPaths.push(entry.path);
       }
     }
+    let worktrees;
+    const worktreeResult = await this.tryGit(cwd, ["worktree", "list", "--porcelain", "-z"], this.metadataMaxBuffer);
+    if (worktreeResult.ok) {
+      worktrees = parseWorktreeList(worktreeResult.stdout);
+    }
     return {
       available: true,
       baseline: {
         schemaVersion: 1,
         baseCommit,
         baseBranch,
-        initialDirtyPaths: initialDirtyPaths.sort()
+        initialDirtyPaths: initialDirtyPaths.sort(),
+        worktrees
       }
+    };
+  }
+  async resolveReviewWorkspace(sessionCwd, baseline) {
+    if (!baseline.worktrees || baseline.worktrees.length === 0) {
+      return { kind: "fallback", path: sessionCwd };
+    }
+    const listResult = await this.tryGit(sessionCwd, ["worktree", "list", "--porcelain", "-z"], this.metadataMaxBuffer);
+    if (!listResult.ok) {
+      return { kind: "fallback", path: sessionCwd };
+    }
+    const currentWorktrees = parseWorktreeList(listResult.stdout);
+    const baselineByPath = new Map(
+      baseline.worktrees.map((wt) => [this.normalizeWorktreePath(wt.path), wt])
+    );
+    const candidates = [];
+    for (const current of currentWorktrees) {
+      const normalizedPath = this.normalizeWorktreePath(current.path);
+      const baselineEntry = baselineByPath.get(normalizedPath);
+      if (baselineEntry) {
+        if (baselineEntry.headCommit === baseline.baseCommit && current.headCommit !== baseline.baseCommit) {
+          candidates.push({ path: current.path, headCommit: current.headCommit, baselineHeadCommit: baselineEntry.headCommit });
+        }
+      } else {
+        if (current.headCommit !== baseline.baseCommit) {
+          candidates.push({ path: current.path, headCommit: current.headCommit, baselineHeadCommit: null });
+        }
+      }
+    }
+    if (candidates.length === 1) {
+      return { kind: "selected", path: candidates[0].path };
+    }
+    if (candidates.length === 0) {
+      return { kind: "fallback", path: sessionCwd };
+    }
+    return {
+      kind: "unavailable",
+      reason: "ambiguous_worktrees",
+      diagnostics: { candidates }
     };
   }
   async collectCommittedChanges(cwd, baseline) {
@@ -21684,7 +21755,18 @@ var NodeGitInspector = class {
         changeSet: this.unavailableChangeSet("git_command_failed")
       };
     }
-    const repoCheck = await this.tryGit(cwd, ["rev-parse", "--git-dir"], this.metadataMaxBuffer);
+    const resolution = await this.resolveReviewWorkspace(cwd, baseline);
+    if (resolution.kind === "unavailable") {
+      return {
+        baseCommit: baseline.baseCommit,
+        headCommit: void 0,
+        commits: [],
+        changeSet: this.unavailableChangeSet(resolution.reason),
+        diagnostics: resolution.diagnostics
+      };
+    }
+    const inspectCwd = resolution.path;
+    const repoCheck = await this.tryGit(inspectCwd, ["rev-parse", "--git-dir"], this.metadataMaxBuffer);
     if (!repoCheck.ok) {
       return {
         baseCommit: baseline.baseCommit,
@@ -21693,7 +21775,7 @@ var NodeGitInspector = class {
         changeSet: this.unavailableChangeSet("not_a_git_repository")
       };
     }
-    const headResult = await this.tryGit(cwd, ["rev-parse", "HEAD"], this.metadataMaxBuffer);
+    const headResult = await this.tryGit(inspectCwd, ["rev-parse", "HEAD"], this.metadataMaxBuffer);
     if (!headResult.ok) {
       return {
         baseCommit: baseline.baseCommit,
@@ -21712,7 +21794,7 @@ var NodeGitInspector = class {
       };
     }
     const ancestorResult = await this.tryGit(
-      cwd,
+      inspectCwd,
       ["merge-base", "--is-ancestor", baseline.baseCommit, "HEAD"],
       this.metadataMaxBuffer
     );
@@ -21733,12 +21815,13 @@ var NodeGitInspector = class {
       };
     }
     try {
-      const commits = await this.listCommits(cwd, baseline.baseCommit, headCommit);
-      const { changedFiles, additions, deletions } = await this.collectStats(cwd, baseline.baseCommit, headCommit);
-      const { diffs, truncatedPaths } = await this.collectPatches(cwd, baseline.baseCommit, headCommit);
+      const commits = await this.listCommits(inspectCwd, baseline.baseCommit, headCommit);
+      const { changedFiles, additions, deletions } = await this.collectStats(inspectCwd, baseline.baseCommit, headCommit);
+      const { diffs, truncatedPaths } = await this.collectPatches(inspectCwd, baseline.baseCommit, headCommit);
       return {
         baseCommit: baseline.baseCommit,
         headCommit,
+        reviewWorkspace: resolution.kind === "selected" ? inspectCwd : void 0,
         commits,
         changeSet: {
           available: true,
@@ -21799,14 +21882,14 @@ var NodeGitInspector = class {
         i += 1;
         continue;
       }
-      const [addField, delField, path2] = fields;
-      if (path2) {
+      const [addField, delField, path3] = fields;
+      if (path3) {
         if (addField === "-" && delField === "-") {
         } else {
           additions += parseInt(addField, 10);
           deletions += parseInt(delField, 10);
         }
-        changedFiles.push(path2);
+        changedFiles.push(path3);
         i += 1;
         continue;
       }
@@ -21829,12 +21912,12 @@ var NodeGitInspector = class {
     const paths = nameResult.toString("utf8").split("\0").filter(Boolean);
     const diffs = [];
     const truncatedPaths = [];
-    for (const path2 of paths) {
+    for (const path3 of paths) {
       try {
-        const patch = await this.git(cwd, ["diff", `${base}..${head}`, "--", path2]);
-        diffs.push({ path: path2, diff: patch.toString("utf8"), source: "committed" });
+        const patch = await this.git(cwd, ["diff", `${base}..${head}`, "--", path3]);
+        diffs.push({ path: path3, diff: patch.toString("utf8"), source: "committed" });
       } catch {
-        truncatedPaths.push(path2);
+        truncatedPaths.push(path3);
       }
     }
     return { diffs, truncatedPaths };
@@ -21859,14 +21942,19 @@ function buildWebUrl(serverUrl, sessionId) {
   return `${serverUrl}/sessions/${encodeURIComponent(sessionId)}`;
 }
 function baselineMetadata(baseline) {
-  return {
-    codex_kimi_bridge: {
-      schema_version: 1,
-      base_commit: baseline.baseCommit,
-      ...baseline.baseBranch ? { base_branch: baseline.baseBranch } : {},
-      initial_dirty_paths: baseline.initialDirtyPaths
-    }
+  const codexKimiBridge = {
+    schema_version: 1,
+    base_commit: baseline.baseCommit,
+    ...baseline.baseBranch ? { base_branch: baseline.baseBranch } : {},
+    initial_dirty_paths: baseline.initialDirtyPaths
   };
+  if (baseline.worktrees && baseline.worktrees.length > 0) {
+    codexKimiBridge.worktrees = baseline.worktrees.map((wt) => ({
+      path: wt.path,
+      head_commit: wt.headCommit
+    }));
+  }
+  return { codex_kimi_bridge: codexKimiBridge };
 }
 function parseBaselineMetadata(metadata) {
   if (!metadata || typeof metadata !== "object") return void 0;
@@ -21879,16 +21967,26 @@ function parseBaselineMetadata(metadata) {
   if (!baseCommit || !OBJECT_ID_RE.test(baseCommit)) return void 0;
   const baseBranch = typeof bridgeObj.base_branch === "string" ? bridgeObj.base_branch : void 0;
   const initialDirtyPaths = Array.isArray(bridgeObj.initial_dirty_paths) ? bridgeObj.initial_dirty_paths.filter((p) => typeof p === "string") : [];
+  const worktreesRaw = bridgeObj.worktrees;
+  const worktrees = Array.isArray(worktreesRaw) ? worktreesRaw.map((item) => {
+    if (!item || typeof item !== "object") return void 0;
+    const wt = item;
+    const wtPath = typeof wt.path === "string" ? wt.path : void 0;
+    const headCommit = typeof wt.head_commit === "string" ? wt.head_commit : void 0;
+    if (!wtPath || !headCommit) return void 0;
+    return { path: wtPath, headCommit };
+  }).filter((wt) => wt !== void 0) : void 0;
   return {
     schemaVersion: 1,
     baseCommit,
     baseBranch,
-    initialDirtyPaths
+    initialDirtyPaths,
+    worktrees
   };
 }
 function normalizeCwd(cwd) {
   if (cwd === void 0) return void 0;
-  const normalized = path.normalize(cwd);
+  const normalized = path2.normalize(cwd);
   return normalized.endsWith("/") && normalized.length > 1 ? normalized.slice(0, -1) : normalized;
 }
 function buildRecentSession(serverUrl, session, serverToken) {
@@ -22082,11 +22180,11 @@ async function buildDelegateAndWaitDiagnostics(kimi, sessionId, status, webUrl, 
 }
 var defaultFileLister = {
   async listFiles(baseDir, relativeDir) {
-    const fullDir = path.join(baseDir, relativeDir);
+    const fullDir = path2.join(baseDir, relativeDir);
     const entries = await readdir(fullDir, { withFileTypes: true });
     const files = [];
     for (const entry of entries) {
-      const childRelativePath = path.posix.join(relativeDir, entry.name);
+      const childRelativePath = path2.posix.join(relativeDir, entry.name);
       if (entry.isDirectory()) {
         files.push(...await this.listFiles(baseDir, childRelativePath));
       } else if (entry.isFile() || entry.isSymbolicLink()) {
@@ -22371,9 +22469,25 @@ function createToolHandlers(deps) {
         listFiles: fileLister.listFiles.bind(fileLister)
       });
       const workingTreeDiffs = await Promise.all(
-        workingTreeFiles.map((path2) => deps.kimi.getFileDiff(input.sessionId, path2))
+        workingTreeFiles.map((path3) => deps.kimi.getFileDiff(input.sessionId, path3))
       );
-      const workingTreeChanges = {
+      const baseline = parseBaselineMetadata(session.metadata);
+      let committedResult;
+      try {
+        committedResult = await gitInspector.collectCommittedChanges(session.metadata.cwd, baseline);
+      } catch {
+      }
+      const sessionCwd = session.metadata.cwd;
+      const reviewWorkspace = committedResult?.reviewWorkspace;
+      const workingTreeChanges = reviewWorkspace && reviewWorkspace !== sessionCwd ? {
+        available: false,
+        changedFiles: [],
+        additions: 0,
+        deletions: 0,
+        diffs: [],
+        truncatedPaths: [],
+        unavailableReason: "review_workspace_mismatch"
+      } : {
         available: true,
         changedFiles: workingTreeFiles,
         additions: gitStatus.additions,
@@ -22381,18 +22495,13 @@ function createToolHandlers(deps) {
         diffs: workingTreeDiffs.map((item) => ({ ...item, source: "working_tree" })),
         truncatedPaths: []
       };
-      const baseline = parseBaselineMetadata(session.metadata);
-      let committedResult;
-      try {
-        committedResult = await gitInspector.collectCommittedChanges(session.metadata.cwd, baseline);
-      } catch {
-      }
       return buildHandoff({
         messages,
         waitStatus: session.status,
         serverToken: deps.config.serverToken,
         baseCommit: committedResult?.baseCommit,
         headCommit: committedResult?.headCommit,
+        reviewWorkspace: committedResult?.reviewWorkspace,
         commits: committedResult?.commits ?? [],
         initialDirtyPaths: baseline?.initialDirtyPaths ?? [],
         committedChanges: committedResult?.changeSet ?? {
@@ -22404,7 +22513,8 @@ function createToolHandlers(deps) {
           truncatedPaths: [],
           unavailableReason: baseline === void 0 ? "baseline_unavailable" : "git_command_failed"
         },
-        workingTreeChanges
+        workingTreeChanges,
+        committedDiagnostics: committedResult?.diagnostics
       });
     },
     async kimi_review_package(input) {
@@ -22615,7 +22725,7 @@ var KimiPreflight = class {
         'echo "KIMI_SERVER_TOKEN is configured via environment; verify it is valid and matches the server."'
       ];
     }
-    const check2 = (path2) => `test -f ${shellQuote(path2)} && echo "token file exists" || echo "token file missing"`;
+    const check2 = (path3) => `test -f ${shellQuote(path3)} && echo "token file exists" || echo "token file missing"`;
     if (serverTokenSource === "kimi_code_home" && kimiCodeHome) {
       return [check2(join2(kimiCodeHome, "server.token"))];
     }
