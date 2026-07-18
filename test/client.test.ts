@@ -75,26 +75,65 @@ describe('KimiClient', () => {
     expect(http.get).toHaveBeenCalledWith('/sessions/s1');
   });
 
-  it('lists sessions with mapped query fields', async () => {
-    const http: HttpPort = {
-      post: vi.fn(),
-      get: vi.fn(async () => ({
-        items: [
-          { id: 's1', title: 'Task 1', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0, created_at: '2026-01-01T00:00:00Z' },
-          { id: 's2', title: 'Task 2', status: 'running', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 1 },
-        ],
-      })) as HttpPort['get'],
-    };
-    const client = new KimiClient(http);
+  it('normalizes legacy and Kimi 0.27 session resources', async () => {
+    const get = vi.fn(async (path: string) => {
+      if (path === '/sessions/legacy') {
+        return { id: 'legacy', title: 'old', status: 'running', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 };
+      }
+      return {
+        id: 'modern',
+        title: 'new',
+        busy: false,
+        pending_interaction: 'question',
+        metadata: { cwd: '/repo' },
+        agent_config: { model: '' },
+        last_seq: 0,
+      };
+    }) as HttpPort['get'];
+    const client = new KimiClient({ get, post: vi.fn() as HttpPort['post'] });
 
-    const result = await client.listSessions({ pageSize: 5, status: 'running', includeArchive: true, excludeEmpty: true });
+    await expect(client.getRuntimeStatus('legacy')).resolves.toBe('running');
+    await expect(client.getRuntimeStatus('modern')).resolves.toBe('awaiting_question');
+  });
 
-    expect(result.items).toHaveLength(2);
-    expect(http.get).toHaveBeenCalledWith('/sessions', {
+  it('filters normalized session statuses client-side for Kimi 0.27', async () => {
+    const get = vi.fn(async () => ({
+      items: [
+        { id: 's1', title: 'running', busy: true, pending_interaction: 'none', metadata: { cwd: '/repo' }, agent_config: { model: '' }, last_seq: 0 },
+        { id: 's2', title: 'failed', busy: false, pending_interaction: 'none', last_turn_reason: 'failed', metadata: { cwd: '/repo' }, agent_config: { model: '' }, last_seq: 0 },
+        { id: 's3', title: 'idle', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+      ],
+    })) as HttpPort['get'];
+    const client = new KimiClient({ get, post: vi.fn() as HttpPort['post'] });
+
+    const result = await client.listSessions({ pageSize: 1, status: 'failed' });
+
+    expect(get).toHaveBeenCalledWith('/sessions', {
+      page_size: 100,
+      include_archive: undefined,
+      exclude_empty: undefined,
+    });
+    expect(result.items.map((session) => [session.id, session.status])).toEqual([['s2', 'failed']]);
+  });
+
+  it('preserves the requested page size when no status filter is used', async () => {
+    const get = vi.fn(async () => ({ items: [] })) as HttpPort['get'];
+    const client = new KimiClient({ get, post: vi.fn() as HttpPort['post'] });
+
+    await client.listSessions({ pageSize: 5, includeArchive: true, excludeEmpty: true });
+
+    expect(get).toHaveBeenCalledWith('/sessions', {
       page_size: 5,
-      status: 'running',
       include_archive: true,
       exclude_empty: true,
     });
+  });
+
+  it('reads safe Kimi server metadata', async () => {
+    const get = vi.fn(async () => ({ server_version: '0.27.0', backend: 'v2' })) as HttpPort['get'];
+    const client = new KimiClient({ get, post: vi.fn() as HttpPort['post'] });
+
+    await expect(client.getMeta()).resolves.toEqual({ server_version: '0.27.0', backend: 'v2' });
+    expect(get).toHaveBeenCalledWith('/meta');
   });
 });

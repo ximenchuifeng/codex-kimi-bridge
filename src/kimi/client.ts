@@ -1,5 +1,6 @@
 import type { KimiHttpClient } from './http.js';
-import type { KimiServerConfig, ListSessionsInput, ListSessionsResult, PendingApproval, PendingQuestion, PermissionMode, PromptSubmitResult, SessionStatus, WireSession } from './types.js';
+import { normalizeRuntimeStatus, type BridgeRuntimeStatus } from './runtime-status.js';
+import type { KimiServerConfig, KimiServerMeta, ListSessionsInput, ListSessionsResult, PendingApproval, PendingQuestion, PermissionMode, PromptSubmitResult, RuntimeSession, SessionStatus, WireSession } from './types.js';
 
 export interface HttpPort {
   get<T>(path: string, query?: Record<string, string | number | boolean | undefined>): Promise<T>;
@@ -36,22 +37,42 @@ function messageText(message: WireMessage): string {
   return message.content.map((part) => part.text ?? '').join('');
 }
 
+const MAX_SESSION_LIST_PAGE_SIZE = 100;
+
+function normalizeSession(session: WireSession): RuntimeSession {
+  const { status: _wireStatus, ...rest } = session;
+  return {
+    ...rest,
+    status: normalizeRuntimeStatus(session),
+  };
+}
+
 export class KimiClient {
   constructor(private readonly http: KimiHttpClient | HttpPort) {}
 
-  createSession(input: CreateSessionInput): Promise<WireSession> {
-    return this.http.post('/sessions', {
+  async createSession(input: CreateSessionInput): Promise<RuntimeSession> {
+    const session = await this.http.post<WireSession>('/sessions', {
       ...(input.title ? { title: input.title } : {}),
       metadata: { cwd: input.cwd },
     });
+    return normalizeSession(session);
   }
 
   getStatus(sessionId: string): Promise<SessionStatus> {
     return this.http.get(`/sessions/${encodeURIComponent(sessionId)}/status`);
   }
 
-  getSession(sessionId: string): Promise<WireSession> {
-    return this.http.get(`/sessions/${encodeURIComponent(sessionId)}`);
+  async getSession(sessionId: string): Promise<RuntimeSession> {
+    const session = await this.http.get<WireSession>(`/sessions/${encodeURIComponent(sessionId)}`);
+    return normalizeSession(session);
+  }
+
+  async getRuntimeStatus(sessionId: string): Promise<BridgeRuntimeStatus> {
+    return (await this.getSession(sessionId)).status;
+  }
+
+  getMeta(): Promise<KimiServerMeta> {
+    return this.http.get('/meta');
   }
 
   submitPrompt(sessionId: string, input: SubmitPromptInput): Promise<PromptSubmitResult> {
@@ -108,12 +129,17 @@ export class KimiClient {
     return page.items;
   }
 
-  listSessions(input: ListSessionsInput): Promise<ListSessionsResult> {
-    return this.http.get<ListSessionsResult>('/sessions', {
-      page_size: input.pageSize,
-      status: input.status,
+  async listSessions(input: ListSessionsInput): Promise<ListSessionsResult> {
+    const requestedPageSize = input.pageSize ?? 20;
+    const page = await this.http.get<{ items: WireSession[] }>('/sessions', {
+      page_size: input.status === undefined ? requestedPageSize : MAX_SESSION_LIST_PAGE_SIZE,
       include_archive: input.includeArchive,
       exclude_empty: input.excludeEmpty,
     });
+    const normalized = page.items.map(normalizeSession);
+    const filtered = input.status === undefined
+      ? normalized
+      : normalized.filter((session) => session.status === input.status);
+    return { items: filtered.slice(0, requestedPageSize) };
   }
 }
