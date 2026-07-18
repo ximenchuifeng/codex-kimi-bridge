@@ -843,7 +843,7 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
           deletions: 0,
           diffs: [],
           truncatedPaths: [],
-          unavailableReason: 'baseline_unavailable',
+          unavailableReason: baseline === undefined ? 'baseline_unavailable' : 'git_command_failed',
         },
         workingTreeChanges,
       });

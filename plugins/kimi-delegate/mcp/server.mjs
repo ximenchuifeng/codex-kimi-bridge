@@ -22402,7 +22402,7 @@ function createToolHandlers(deps) {
           deletions: 0,
           diffs: [],
           truncatedPaths: [],
-          unavailableReason: "baseline_unavailable"
+          unavailableReason: baseline === void 0 ? "baseline_unavailable" : "git_command_failed"
         },
         workingTreeChanges
       });
