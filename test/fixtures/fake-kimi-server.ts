@@ -10,10 +10,38 @@ function envelope(data: unknown): string {
 }
 
 export async function startFakeKimiServer(): Promise<FakeKimiServer> {
+  const session = {
+    id: 's1',
+    workspace_id: 'workspace_1',
+    title: 'test',
+    created_at: '2026-07-18T00:00:00.000Z',
+    updated_at: '2026-07-18T00:00:00.000Z',
+    busy: false,
+    main_turn_active: false,
+    pending_interaction: 'none',
+    last_turn_reason: 'completed',
+    archived: false,
+    metadata: { cwd: '/repo' },
+    agent_config: { model: '' },
+    usage: {
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_creation_tokens: 0,
+      total_cost_usd: 0,
+      context_tokens: 0,
+      context_limit: 0,
+      turn_count: 0,
+    },
+    permission_rules: [],
+    message_count: 1,
+    last_seq: 1,
+  };
+
   const server = createServer((req, res) => {
     res.setHeader('content-type', 'application/json');
     if (req.method === 'POST' && req.url === '/api/v1/sessions') {
-      res.end(envelope({ id: 's1', title: 'test', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 }));
+      res.end(envelope(session));
       return;
     }
     if (req.method === 'POST' && req.url === '/api/v1/sessions/s1/prompts') {
@@ -29,7 +57,25 @@ export async function startFakeKimiServer(): Promise<FakeKimiServer> {
       return;
     }
     if (req.method === 'GET' && req.url === '/api/v1/sessions/s1') {
-      res.end(envelope({ id: 's1', title: 'test', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 }));
+      res.end(envelope(session));
+      return;
+    }
+    if (req.method === 'GET' && req.url === '/api/v1/sessions/s1/status') {
+      res.end(envelope({
+        busy: false,
+        model: 'kimi-k2',
+        thinking_level: 'high',
+        permission: 'auto',
+        plan_mode: false,
+        swarm_mode: false,
+        context_tokens: 0,
+        max_context_tokens: 262144,
+        context_usage: 0,
+      }));
+      return;
+    }
+    if (req.method === 'GET' && req.url === '/api/v1/meta') {
+      res.end(envelope({ server_version: '0.27.0', backend: 'v2' }));
       return;
     }
     if (req.method === 'POST' && req.url === '/api/v1/sessions/s1/fs:git_status') {

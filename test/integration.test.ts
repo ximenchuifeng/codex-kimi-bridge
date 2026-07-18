@@ -25,6 +25,9 @@ describe('bridge integration', () => {
     });
 
     expect(session.id).toBe('s1');
+    expect(session.status).toBe('idle');
+    await expect(kimi.getRuntimeStatus(session.id)).resolves.toBe('idle');
+    await expect(kimi.getMeta()).resolves.toEqual({ server_version: '0.27.0', backend: 'v2' });
     expect(prompt.prompt_id).toBe('p1');
 
     const messages = await kimi.listMessages(session.id);
