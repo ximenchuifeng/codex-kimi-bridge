@@ -5,6 +5,7 @@
       "args": [
         "./mcp/server.mjs"
       ],
+      "cwd": ".",
       "env": {
         "KIMI_SERVER_URL": "http://127.0.0.1:58627",
         "KIMI_PERMISSION_MODE": "auto",

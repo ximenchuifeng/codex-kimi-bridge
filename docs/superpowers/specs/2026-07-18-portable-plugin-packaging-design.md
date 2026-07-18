@@ -85,6 +85,7 @@ Change `plugins/kimi-delegate/.mcp.json` to:
     "kimi-delegate": {
       "command": "node",
       "args": ["./mcp/server.mjs"],
+      "cwd": ".",
       "env": {
         "KIMI_SERVER_URL": "http://127.0.0.1:58627",
         "KIMI_PERMISSION_MODE": "auto",
@@ -100,7 +101,7 @@ Change `plugins/kimi-delegate/.mcp.json` to:
 }
 ```
 
-Codex resolves the relative argument from the installed plugin root. Therefore the same config works from the repository plugin directory and from the copied Codex cache directory.
+Codex resolves `cwd` to the installed plugin root and then resolves the relative `args` path from that working directory. Declaring `"cwd": "."` is required: without it the child process inherits the caller's working directory and `./mcp/server.mjs` resolves to the wrong location after the plugin is copied into the Codex cache. Therefore the same config works from the repository plugin directory and from the copied Codex cache directory.
 
 ## Build Commands
 
@@ -181,7 +182,7 @@ Future published releases increment the normal semantic version. Cachebuster suf
 
 Tests must confirm:
 
-- `.mcp.json` uses `node` plus `./mcp/server.mjs`.
+- `.mcp.json` uses `node` plus `./mcp/server.mjs` and declares `"cwd": "."` so Codex resolves relative paths from the installed plugin root.
 - The referenced bundle exists under the plugin root.
 - Neither `.mcp.json` nor the bundle contains `/Users/ximenchuifeng`, the current repository absolute path, `Authorization: Bearer`, `#token=`, or a real configured token value.
 - The plugin manifest and marketplace still pass Codex validation.
@@ -244,7 +245,7 @@ Update `AGENTS.md` so future Codex tasks know:
 ## Acceptance Criteria
 
 1. No developer-specific absolute path remains in plugin launch configuration or bundle.
-2. `.mcp.json` launches `node ./mcp/server.mjs`.
+2. `.mcp.json` launches `node ./mcp/server.mjs` with `"cwd": "."`.
 3. The tracked bundle starts from a copied temporary plugin directory with no repository `dist` or `node_modules` dependency.
 4. MCP `listTools` from the copied plugin exposes the expected Bridge tools.
 5. A fresh Git clone can be registered and installed without running pnpm or editing files.

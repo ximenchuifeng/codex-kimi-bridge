@@ -4,7 +4,7 @@
 
 **Goal:** Package the Kimi Delegate MCP server inside the Codex plugin so a fresh Git clone can be installed without developer-specific paths, dependency installation, or a local TypeScript build.
 
-**Architecture:** Add a dedicated executable entry point and bundle it with esbuild into the tracked plugin artifact `plugins/kimi-delegate/mcp/server.mjs`. Launch that artifact through a plugin-root-relative `.mcp.json` path, and prove portability by copying the plugin to a temporary directory and connecting to it with an MCP stdio client. Keep source behavior unchanged while adding release metadata and clear first-install versus developer-update documentation.
+**Architecture:** Add a dedicated executable entry point and bundle it with esbuild into the tracked plugin artifact `plugins/kimi-delegate/mcp/server.mjs`. Launch that artifact through a plugin-root-relative `.mcp.json` path with `"cwd": "."`, and prove portability by copying the plugin to a temporary directory and connecting to it with an MCP stdio client. Keep source behavior unchanged while adding release metadata and clear first-install versus developer-update documentation.
 
 **Tech Stack:** TypeScript, Node.js 20+, ESM, esbuild, Vitest, Model Context Protocol TypeScript SDK, Codex plugin manifests.
 
@@ -29,7 +29,7 @@
 - Create `src/plugin-entry.ts`: executable-only entry that invokes exported `main()` and reports startup failure on stderr.
 - Modify `package.json`: add `0.2.0` release metadata, Node engine, esbuild, and separate core/plugin build scripts.
 - Modify `pnpm-lock.yaml`: lock the direct esbuild development dependency and package metadata changes.
-- Modify `plugins/kimi-delegate/.mcp.json`: launch the bundled server through `./mcp/server.mjs`.
+- Modify `plugins/kimi-delegate/.mcp.json`: launch the bundled server through `./mcp/server.mjs` with `"cwd": "."`.
 - Create `plugins/kimi-delegate/mcp/server.mjs`: deterministic, tracked esbuild output containing the MCP runtime.
 - Modify `test/plugin.test.ts`: validate relative launch config, artifact safety, metadata, and copied-directory MCP startup.
 - Modify `plugins/kimi-delegate/.codex-plugin/plugin.json`: publish version, author, repository, homepage, license, and developer metadata.
@@ -86,6 +86,7 @@ describe('Codex plugin package', () => {
     expect(config.mcpServers['kimi-delegate']).toMatchObject({
       command: 'node',
       args: ['./mcp/server.mjs'],
+      cwd: '.',
     });
     expect(existsSync(bundlePath)).toBe(true);
   });
@@ -95,10 +96,14 @@ describe('Codex plugin package', () => {
     const copiedPluginRoot = join(temporaryRoot, 'kimi-delegate');
     cpSync(pluginRoot, copiedPluginRoot, { recursive: true });
 
+    const config = JSON.parse(readFileSync(join(copiedPluginRoot, '.mcp.json'), 'utf8'));
+    const serverConfig = config.mcpServers['kimi-delegate'];
+    const spawnCwd = resolve(copiedPluginRoot, serverConfig.cwd);
+
     const transport = new StdioClientTransport({
-      command: process.execPath,
-      args: ['./mcp/server.mjs'],
-      cwd: copiedPluginRoot,
+      command: serverConfig.command,
+      args: serverConfig.args,
+      cwd: spawnCwd,
       env: {
         HOME: temporaryRoot,
         KIMI_CODE_HOME: join(temporaryRoot, 'kimi-home'),
@@ -189,15 +194,16 @@ Expected: `package.json` lists esbuild directly and `pnpm-lock.yaml` records it 
 
 - [ ] **Step 5: Switch the plugin launch config to its bundled artifact**
 
-Change only the `args` value in `plugins/kimi-delegate/.mcp.json`:
+Change `plugins/kimi-delegate/.mcp.json` to use the bundled server and set Codex's working directory to the plugin root:
 
 ```json
-"args": [
-  "./mcp/server.mjs"
-]
+{
+  "args": ["./mcp/server.mjs"],
+  "cwd": "."
+}
 ```
 
-Keep `command: "node"` and every existing environment default unchanged.
+Keep `command: "node"` and every existing environment default unchanged. The `"cwd": "."` value is required so Codex resolves the relative bundle path from the installed plugin root after copying the plugin into its cache.
 
 - [ ] **Step 6: Generate the tracked plugin bundle**
 

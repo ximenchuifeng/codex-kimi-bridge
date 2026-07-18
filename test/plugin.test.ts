@@ -28,6 +28,7 @@ describe('Codex plugin package', () => {
     expect(config.mcpServers['kimi-delegate']).toMatchObject({
       command: 'node',
       args: ['./mcp/server.mjs'],
+      cwd: '.',
     });
     expect(existsSync(bundlePath)).toBe(true);
   });
@@ -37,10 +38,14 @@ describe('Codex plugin package', () => {
     const copiedPluginRoot = join(temporaryRoot, 'kimi-delegate');
     cpSync(pluginRoot, copiedPluginRoot, { recursive: true });
 
+    const config = JSON.parse(readFileSync(join(copiedPluginRoot, '.mcp.json'), 'utf8'));
+    const serverConfig = config.mcpServers['kimi-delegate'];
+    const spawnCwd = resolve(copiedPluginRoot, serverConfig.cwd);
+
     const transport = new StdioClientTransport({
-      command: process.execPath,
-      args: ['./mcp/server.mjs'],
-      cwd: copiedPluginRoot,
+      command: serverConfig.command,
+      args: serverConfig.args,
+      cwd: spawnCwd,
       env: {
         HOME: temporaryRoot,
         KIMI_CODE_HOME: join(temporaryRoot, 'kimi-home'),
