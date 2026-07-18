@@ -69,4 +69,56 @@ describe('Codex plugin package', () => {
       rmSync(temporaryRoot, { recursive: true, force: true });
     }
   }, 15_000);
+
+  it('contains portable release metadata', () => {
+    const packageJson = JSON.parse(readFileSync(resolve('package.json'), 'utf8'));
+    const manifest = JSON.parse(
+      readFileSync(join(pluginRoot, '.codex-plugin/plugin.json'), 'utf8'),
+    );
+
+    expect(packageJson).toMatchObject({
+      version: '0.2.0',
+      license: 'MIT',
+      author: 'ximenchuifeng',
+      repository: {
+        type: 'git',
+        url: 'git+https://github.com/ximenchuifeng/codex-kimi-bridge.git',
+      },
+      homepage: 'https://github.com/ximenchuifeng/codex-kimi-bridge#readme',
+      engines: { node: '>=20' },
+    });
+    expect(manifest).toMatchObject({
+      name: 'kimi-delegate',
+      version: '0.2.0',
+      license: 'MIT',
+      homepage: 'https://github.com/ximenchuifeng/codex-kimi-bridge#readme',
+      repository: 'https://github.com/ximenchuifeng/codex-kimi-bridge',
+      author: {
+        name: 'ximenchuifeng',
+        url: 'https://github.com/ximenchuifeng',
+      },
+      interface: { developerName: 'ximenchuifeng' },
+    });
+    expect(existsSync(resolve('LICENSE'))).toBe(true);
+  });
+
+  it('does not package machine-specific paths or credential values', () => {
+    const configText = readFileSync(join(pluginRoot, '.mcp.json'), 'utf8');
+    const bundleText = readFileSync(bundlePath, 'utf8');
+
+    // The bundle legitimately contains a token-redaction regex literal and its
+    // replacement string. Strip those before scanning for real token-bearing URLs.
+    const sanitizedBundle = bundleText
+      .split('/#token=[^\\s]+/gi').join('')
+      .split('#token=[redacted]').join('');
+    const packagedText = `${configText}\n${sanitizedBundle}`;
+
+    expect(packagedText).not.toContain('/Users/ximenchuifeng');
+    expect(packagedText).not.toContain(resolve('.'));
+    expect(packagedText).not.toContain('Authorization: Bearer');
+    expect(packagedText).not.toContain('#token=');
+
+    const configuredToken = process.env.KIMI_SERVER_TOKEN?.trim();
+    if (configuredToken) expect(packagedText).not.toContain(configuredToken);
+  });
 });

@@ -1,17 +1,21 @@
 {
   "name": "kimi-delegate",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Delegate implementation tasks from Codex to Kimi Code through a local MCP bridge.",
   "author": {
-    "name": "Local"
+    "name": "ximenchuifeng",
+    "url": "https://github.com/ximenchuifeng"
   },
+  "homepage": "https://github.com/ximenchuifeng/codex-kimi-bridge#readme",
+  "repository": "https://github.com/ximenchuifeng/codex-kimi-bridge",
+  "license": "MIT",
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Kimi Delegate",
     "shortDescription": "Delegate Codex implementation tasks to Kimi Code.",
     "longDescription": "A local bridge that lets Codex coordinate, review, and continue implementation tasks executed by Kimi Code.",
-    "developerName": "Local",
+    "developerName": "ximenchuifeng",
     "category": "Productivity",
     "capabilities": ["Interactive", "Write"],
     "defaultPrompt": "Use the kimi-delegate tools when the user wants Codex to coordinate a software task while Kimi Code performs the implementation. Prepare a spec and plan, delegate with `kimi_delegate_task`, wait with `kimi_wait_until_idle`, gather the handoff and diff with `kimi_get_handoff` and `kimi_get_diff`, and continue with `kimi_continue_task` until acceptance criteria pass. Do not auto-approve destructive commands."

@@ -1,8 +1,18 @@
 {
   "name": "codex-kimi-bridge",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
+  "author": "ximenchuifeng",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ximenchuifeng/codex-kimi-bridge.git"
+  },
+  "homepage": "https://github.com/ximenchuifeng/codex-kimi-bridge#readme",
+  "engines": {
+    "node": ">=20"
+  },
   "bin": {
     "codex-kimi-bridge": "dist/index.js"
   },

@@ -22375,7 +22375,7 @@ async function main() {
   const preflight = new KimiPreflight(config2, http);
   const kimi = new KimiClient(http);
   const handlers = createToolHandlers({ kimi, config: config2, preflight });
-  const server = new McpServer({ name: "codex-kimi-bridge", version: "0.1.0" });
+  const server = new McpServer({ name: "codex-kimi-bridge", version: "0.2.0" });
   server.tool(
     "kimi_delegate_task",
     {
