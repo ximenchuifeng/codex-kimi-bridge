@@ -21100,6 +21100,10 @@ var StdioServerTransport = class {
   }
 };
 
+// src/index.ts
+import { basename } from "node:path";
+import { fileURLToPath } from "node:url";
+
 // src/config.ts
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -22496,7 +22500,14 @@ async function main() {
   );
   await server.connect(new StdioServerTransport());
 }
-if (import.meta.url === `file://${process.argv[1]}`) {
+function isDirectExecution(metaUrl) {
+  try {
+    return basename(fileURLToPath(metaUrl)) === "index.js";
+  } catch {
+    return false;
+  }
+}
+if (isDirectExecution(import.meta.url)) {
   main().catch((error2) => {
     process.stderr.write(`${error2 instanceof Error ? error2.stack : String(error2)}
 `);

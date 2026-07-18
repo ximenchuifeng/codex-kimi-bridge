@@ -1,6 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import { KimiApiError, KimiNetworkError } from '../src/errors.js';
-import { runToolHandler } from '../src/index.js';
+import { isDirectExecution, runToolHandler } from '../src/index.js';
+
+describe('isDirectExecution', () => {
+  it('returns true for a file URL whose basename is index.js', () => {
+    expect(isDirectExecution('file:///some/path/dist/index.js')).toBe(true);
+    expect(isDirectExecution('file:///index.js')).toBe(true);
+  });
+
+  it('returns false for non-index.js entry files', () => {
+    expect(isDirectExecution('file:///some/path/mcp/server.mjs')).toBe(false);
+    expect(isDirectExecution('file:///some/path/dist/index.mjs')).toBe(false);
+    expect(isDirectExecution('file:///some/path/server.cjs')).toBe(false);
+  });
+
+  it('returns false for invalid URLs', () => {
+    expect(isDirectExecution('not-a-url')).toBe(false);
+    expect(isDirectExecution('')).toBe(false);
+  });
+});
 
 describe('runToolHandler', () => {
   it('returns successful results as MCP text content', async () => {

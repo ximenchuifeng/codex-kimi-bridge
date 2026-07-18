@@ -102,6 +102,16 @@ describe('Codex plugin package', () => {
     expect(existsSync(resolve('LICENSE'))).toBe(true);
   });
 
+  it('uses a basename-aware guard so the bundle starts main exactly once', () => {
+    const bundleText = readFileSync(bundlePath, 'utf8');
+
+    // The previous equality guard would be true when server.mjs is launched
+    // directly, causing src/index.ts and src/plugin-entry.ts to both call main().
+    expect(bundleText).not.toContain('if (import.meta.url === `file://${process.argv[1]}`)');
+    // The new guard must inspect the module URL basename so server.mjs skips it.
+    expect(bundleText).toContain('isDirectExecution(import.meta.url)');
+  });
+
   it('does not package machine-specific paths or credential values', () => {
     const configText = readFileSync(join(pluginRoot, '.mcp.json'), 'utf8');
     const bundleText = readFileSync(bundlePath, 'utf8');

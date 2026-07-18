@@ -1,5 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { basename } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { loadBridgeConfig } from './config.js';
 import { KimiApiError, KimiNetworkError } from './errors.js';
@@ -212,7 +214,15 @@ export async function main(): Promise<void> {
   await server.connect(new StdioServerTransport());
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+export function isDirectExecution(metaUrl: string): boolean {
+  try {
+    return basename(fileURLToPath(metaUrl)) === 'index.js';
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectExecution(import.meta.url)) {
   main().catch((error) => {
     process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
     process.exit(1);
