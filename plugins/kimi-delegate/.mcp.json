@@ -3,7 +3,7 @@
     "kimi-delegate": {
       "command": "node",
       "args": [
-        "/Users/ximenchuifeng/Coding/codex-kimi-bridge/dist/index.js"
+        "./mcp/server.mjs"
       ],
       "env": {
         "KIMI_SERVER_URL": "http://127.0.0.1:58627",
