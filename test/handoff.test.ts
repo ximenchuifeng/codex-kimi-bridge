@@ -5,8 +5,8 @@ describe('buildHandoff', () => {
   it('extracts changed files and final assistant text', () => {
     const handoff = buildHandoff({
       messages: [
-        { role: 'assistant', content: 'Working...' },
         { role: 'assistant', content: 'files changed\n- src/a.ts\ncommands run\n- pnpm test' },
+        { role: 'assistant', content: 'Working...' },
       ],
       gitStatus: { entries: { 'src/a.ts': 'M' }, additions: 10, deletions: 2 },
       diffs: [{ path: 'src/a.ts', diff: '@@ fake diff' }],
@@ -28,5 +28,20 @@ describe('buildHandoff', () => {
     });
 
     expect(handoff.changedFiles).toEqual(['tmp/file.txt']);
+  });
+
+  it('selects the newest non-empty assistant message when messages are newest-first', () => {
+    const handoff = buildHandoff({
+      messages: [
+        { role: 'assistant', content: 'new final report' },
+        { role: 'assistant', content: '' },
+        { role: 'assistant', content: 'old report' },
+      ],
+      gitStatus: { entries: {}, additions: 0, deletions: 0 },
+      diffs: [],
+      waitStatus: 'idle',
+    });
+
+    expect(handoff.finalMessage).toBe('new final report');
   });
 });

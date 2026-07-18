@@ -1,3 +1,5 @@
+import { selectLatestMeaningfulMessage } from './messages.js';
+
 export interface HandoffMessage {
   role: string;
   content: string;
@@ -20,6 +22,7 @@ export interface BuildHandoffInput {
   diffs: readonly FileDiff[];
   waitStatus: string;
   changedFiles?: string[];
+  serverToken?: string;
 }
 
 export interface KimiHandoff {
@@ -39,10 +42,14 @@ export interface ExpandGitStatusEntriesInput {
 }
 
 export function buildHandoff(input: BuildHandoffInput): KimiHandoff {
-  const finalAssistant = [...input.messages].reverse().find((message) => message.role === 'assistant');
+  const finalMessage = selectLatestMeaningfulMessage(
+    input.messages,
+    'assistant',
+    input.serverToken,
+  ) ?? '';
   return {
     status: input.waitStatus,
-    finalMessage: finalAssistant?.content ?? '',
+    finalMessage,
     changedFiles: input.changedFiles ?? Object.keys(input.gitStatus.entries).sort(),
     additions: input.gitStatus.additions,
     deletions: input.gitStatus.deletions,

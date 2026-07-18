@@ -149,8 +149,8 @@ describe('tool handlers', () => {
     const kimi = makeKimi({
       getRuntimeStatus: vi.fn(async () => 'idle'),
       listMessages: vi.fn(async () => [
-        { role: 'assistant', content: 'Working...' },
         { role: 'assistant', content: 'files changed\n- src/a.ts' },
+        { role: 'assistant', content: 'Working...' },
       ]),
       getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 10, deletions: 2 })),
       getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: `@@ diff for ${path}` })),
@@ -1856,10 +1856,10 @@ describe('tool handlers', () => {
 
     it('returns summary with messageCount and last messages when includeSummary is true', async () => {
       const listMessages = vi.fn(async () => [
-        { role: 'user', content: 'first user message' },
-        { role: 'assistant', content: 'first assistant message' },
-        { role: 'user', content: 'last user message' },
         { role: 'assistant', content: 'last assistant message' },
+        { role: 'user', content: 'last user message' },
+        { role: 'assistant', content: 'first assistant message' },
+        { role: 'user', content: 'first user message' },
       ]);
       const listSessions = vi.fn(async () => ({
         items: [
@@ -2071,6 +2071,29 @@ describe('tool handlers', () => {
       expect(summary?.lastUserMessage).toContain('use [redacted]');
       expect(JSON.stringify(result)).not.toContain('url-secret');
       expect(JSON.stringify(result)).not.toContain('config-secret');
+    });
+
+    it('selects the latest meaningful assistant message in newest-first order', async () => {
+      const listMessages = vi.fn(async () => [
+        { role: 'assistant', content: 'new final report' },
+        { role: 'assistant', content: '' },
+        { role: 'assistant', content: '   ' },
+        { role: 'assistant', content: 'old report' },
+      ]);
+      const listSessions = vi.fn(async () => ({
+        items: [
+          { id: 's1', title: 'Feature X', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+        ],
+      }));
+      const kimi = makeKimi({ listSessions, listMessages });
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+      const result = await handlers.kimi_find_recent_session({ titleContains: 'feature', includeSummary: true });
+
+      expect(result.candidates[0].summary).toEqual({
+        messageCount: 4,
+        lastAssistantMessage: 'new final report',
+      });
     });
   });
 

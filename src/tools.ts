@@ -4,6 +4,7 @@ import type { KimiHandoff } from './handoff.js';
 import type { KimiClient } from './kimi/client.js';
 import { waitUntilIdle, type WaitUntilIdleResult } from './kimi/wait.js';
 import { buildHandoff, expandGitStatusEntries } from './handoff.js';
+import { sanitizeDiagnosticText, selectLatestMeaningfulMessage } from './messages.js';
 import type { BridgeRuntimeStatus, ListSessionsInput, RecentSession, RecentSessionSummary, RuntimeSession, WireSession } from './kimi/types.js';
 import type { BridgeStatus, KimiPreflight } from './preflight.js';
 import { readdir } from 'node:fs/promises';
@@ -203,12 +204,6 @@ function normalizeCwd(cwd: string | undefined): string | undefined {
   return normalized.endsWith('/') && normalized.length > 1 ? normalized.slice(0, -1) : normalized;
 }
 
-function sanitizeSessionTitle(title: string): string {
-  return title
-    .replace(/#token=[^\s]+/gi, '#token=[redacted]')
-    .replace(/([?&]token=)[^&\s]+/gi, '$1[redacted]');
-}
-
 function buildRecentSession(serverUrl: string, session: RuntimeSession & { created_at?: string; updated_at?: string }, serverToken: string | undefined): RecentSession {
   return {
     sessionId: session.id,
@@ -270,26 +265,6 @@ function truncateMessage(content: string): string {
   return `${content.slice(0, MESSAGE_TRUNCATION_LIMIT)}...`;
 }
 
-function redactToken(value: string, token: string | undefined): string {
-  if (!token || token.length === 0) return value;
-  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return value.replace(new RegExp(escaped, 'g'), '[redacted]');
-}
-
-function sanitizeDiagnosticText(value: string, token: string | undefined): string {
-  return redactToken(sanitizeSessionTitle(value), token);
-}
-
-function isInternalSummaryMessage(content: string): boolean {
-  const trimmed = content.trim();
-  return (
-    trimmed.startsWith('<system-reminder>') ||
-    trimmed.includes('<plugin_session_start') ||
-    trimmed.includes('Kimi Code tool mapping for Superpowers skills') ||
-    trimmed.includes('Auto permission mode is active')
-  );
-}
-
 async function buildRecentSessionSummary(
   kimi: KimiClient,
   sessionId: string,
@@ -297,26 +272,18 @@ async function buildRecentSessionSummary(
 ): Promise<RecentSessionSummary> {
   try {
     const messages = await kimi.listMessages(sessionId);
-    let lastUserMessage: string | undefined;
-    let lastAssistantMessage: string | undefined;
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const message = messages[i];
-      if (lastUserMessage === undefined && message.role === 'user') {
-        const sanitized = sanitizeDiagnosticText(message.content, serverToken).trim();
-        if (!isInternalSummaryMessage(message.content) && sanitized.length > 0) {
-          lastUserMessage = truncateMessage(sanitized);
-        }
-      }
-      if (lastAssistantMessage === undefined && message.role === 'assistant') {
-        const sanitized = sanitizeDiagnosticText(message.content, serverToken).trim();
-        if (!isInternalSummaryMessage(message.content) && sanitized.length > 0) {
-          lastAssistantMessage = truncateMessage(sanitized);
-        }
-      }
-      if (lastUserMessage !== undefined && lastAssistantMessage !== undefined) {
-        break;
-      }
-    }
+    const lastUserMessage = selectLatestMeaningfulMessage(
+      messages,
+      'user',
+      serverToken,
+      MESSAGE_TRUNCATION_LIMIT,
+    );
+    const lastAssistantMessage = selectLatestMeaningfulMessage(
+      messages,
+      'assistant',
+      serverToken,
+      MESSAGE_TRUNCATION_LIMIT,
+    );
     return {
       messageCount: messages.length,
       ...(lastUserMessage !== undefined ? { lastUserMessage } : {}),
@@ -760,7 +727,7 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
 
       const diffs = await Promise.all(changedFiles.map((path) => deps.kimi.getFileDiff(input.sessionId, path)));
 
-      return buildHandoff({ messages, gitStatus, diffs, waitStatus: session.status, changedFiles });
+      return buildHandoff({ messages, gitStatus, diffs, waitStatus: session.status, changedFiles, serverToken: deps.config.serverToken });
     },
 
     async kimi_review_package(input: ReviewPackageInput) {
