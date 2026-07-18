@@ -11,9 +11,28 @@ export interface GitStatusSummary {
   deletions: number;
 }
 
+export type DiffSource = 'committed' | 'working_tree';
+
 export interface FileDiff {
   path: string;
   diff: string;
+  source?: DiffSource;
+}
+
+export interface CommitSummary {
+  sha: string;
+  shortSha: string;
+  subject: string;
+}
+
+export interface HandoffChangeSet {
+  available: boolean;
+  changedFiles: string[];
+  additions: number;
+  deletions: number;
+  diffs: FileDiff[];
+  truncatedPaths: string[];
+  unavailableReason?: string;
 }
 
 export interface BuildHandoffInput {
