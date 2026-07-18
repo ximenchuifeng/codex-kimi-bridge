@@ -4,7 +4,7 @@ import type { CommitSummary, FileDiff, HandoffChangeSet } from './handoff.js';
 
 const execFileAsync = promisify(execFile);
 
-const OBJECT_ID_RE = /^[0-9a-fA-F]{40}$|^[0-9a-fA-F]{64}$/;
+export const OBJECT_ID_RE = /^[0-9a-fA-F]{40}$|^[0-9a-fA-F]{64}$/;
 
 export interface GitBaseline {
   schemaVersion: 1;

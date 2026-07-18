@@ -9,7 +9,7 @@ import type { BridgeRuntimeStatus, ListSessionsInput, RecentSession, RecentSessi
 import type { BridgeStatus, KimiPreflight } from './preflight.js';
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
-import { NodeGitInspector, type GitInspector, type GitBaseline } from './git.js';
+import { NodeGitInspector, type GitInspector, type GitBaseline, OBJECT_ID_RE } from './git.js';
 
 export interface FileLister {
   listFiles(baseDir: string, relativeDir: string): Promise<string[]>;
@@ -232,7 +232,7 @@ function parseBaselineMetadata(metadata: Record<string, unknown> | undefined): G
   }
   const bridgeObj = bridge as Record<string, unknown>;
   const baseCommit = typeof bridgeObj.base_commit === 'string' ? bridgeObj.base_commit : undefined;
-  if (!baseCommit) return undefined;
+  if (!baseCommit || !OBJECT_ID_RE.test(baseCommit)) return undefined;
   const baseBranch = typeof bridgeObj.base_branch === 'string' ? bridgeObj.base_branch : undefined;
   const initialDirtyPaths = Array.isArray(bridgeObj.initial_dirty_paths)
     ? bridgeObj.initial_dirty_paths.filter((p): p is string => typeof p === 'string')

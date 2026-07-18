@@ -203,6 +203,28 @@ describe('tool handlers', () => {
     expect(handoff.initialDirtyPaths).toEqual([]);
   });
 
+  it('returns baseline_unavailable when stored baseline has an invalid commit id', async () => {
+    const kimi = makeKimi({
+      getRuntimeStatus: vi.fn(async () => 'idle'),
+      listMessages: vi.fn(async () => []),
+      getGitStatus: vi.fn(async () => ({ entries: {}, additions: 0, deletions: 0 })),
+      getSession: vi.fn(async () => ({
+        id: 's1',
+        title: 'test',
+        status: 'idle',
+        metadata: { cwd: '/repo', codex_kimi_bridge: { schema_version: 1, base_commit: 'not-a-valid-id', initial_dirty_paths: [] } },
+        agent_config: {},
+        last_seq: 0,
+      })),
+    });
+    const handlers = createToolHandlers({ kimi, config: makeConfig(), preflight: makePreflight() });
+
+    const handoff = await handlers.kimi_get_handoff({ sessionId: 's1' });
+
+    expect(handoff.committedChanges.available).toBe(false);
+    expect(handoff.committedChanges.unavailableReason).toBe('baseline_unavailable');
+  });
+
   it('includes committed changes when baseline metadata is present and working tree is clean', async () => {
     const baseline = {
       schemaVersion: 1 as const,

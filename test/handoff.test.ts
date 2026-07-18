@@ -164,4 +164,18 @@ describe('buildHandoff', () => {
     expect(handoff.committedChanges.available).toBe(false);
     expect(handoff.committedChanges.unavailableReason).toBe('baseline_unavailable');
   });
+
+  it('redacts the configured server token from the final message', () => {
+    const handoff = buildHandoff({
+      messages: [{ role: 'assistant', content: 'done with secret-token' }],
+      waitStatus: 'idle',
+      serverToken: 'secret-token',
+      commits: [],
+      initialDirtyPaths: [],
+      committedChanges: makeChangeSet(),
+      workingTreeChanges: makeChangeSet(),
+    });
+
+    expect(handoff.finalMessage).toBe('done with [redacted]');
+  });
 });
