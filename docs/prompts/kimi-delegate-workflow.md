@@ -122,14 +122,15 @@ Codex should shape delegated work like this:
 - 不要做无关重构
 
 完成后返回：
-1. 修改文件列表
-2. 测试结果
-3. 关键行为摘要
-4. 关键 diff 摘要
-5. 是否偏离 plan
-6. 已知风险 / 后续建议
-7. 如果遇到阻塞、额度、approval、question 或中断，请明确说明状态和建议继续方式
-8. 等待 Codex 复核
+1. 一段简洁的最终报告（非空、非内部控制消息）
+2. 修改文件列表
+3. 测试结果
+4. 关键行为摘要
+5. 关键 diff 摘要
+6. 是否偏离 plan
+7. 已知风险 / 后续建议
+8. 如果遇到阻塞、额度、approval、question 或中断，请明确说明状态和建议继续方式
+9. 等待 Codex 复核
 ```
 
 ## Preferred Tool Flow
@@ -139,7 +140,7 @@ Codex should shape delegated work like this:
 3. If you suspect an `aborted` or `failed` session, call `kimi_find_recent_session` or `kimi_recent_sessions`, inspect the `webUrl`, and use `kimi_continue_task` to resume it. `kimi_delegate_and_wait` will never automatically reuse an aborted or failed session.
 4. If you need more control for other cases, call `kimi_find_recent_session` (search by title) or `kimi_recent_sessions` first and inspect `status`, `title`, and `webUrl` before delegating again.
 5. Call `kimi_delegate_and_wait` for normal implementation work.
-6. If `wait.status` is `idle`, review the embedded `reviewPackage`.
+6. If `wait.status` is `idle`, review the embedded `reviewPackage`. Inspect both `committedChanges` and `workingTreeChanges`; do not infer "no changes" from a clean working tree alone. A legacy session may report `committedChanges.available: false` with `baseline_unavailable`; in that case rely on working-tree evidence and direct Git inspection.
 7. If `wait.status` is `timeout`, keep `sessionId` and call `kimi_wait_until_idle` later.
 8. If `wait.status` is `failed`, fix the cause and continue the same session with `kimi_continue_task`.
 9. If blocked on approval or question, resolve it in Kimi Web and continue the same session.

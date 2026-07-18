@@ -26,7 +26,7 @@ Every task sent to Kimi must include:
 - acceptance criteria
 - Codex plan
 - swarm split suggestion when useful
-- handoff requirements
+- handoff requirements: a concrete final report plus committed and working-tree change evidence
 
 ## Review Loop
 
@@ -34,6 +34,10 @@ Every task sent to Kimi must include:
 2. Delegate to Kimi.
 3. Wait for Kimi to finish or block.
 4. Gather handoff and diff.
-5. Review against acceptance criteria.
-6. Send precise follow-up feedback to Kimi if review fails.
-7. Independently verify before declaring completion.
+5. Inspect both `committedChanges` and `workingTreeChanges` in the handoff or review package.
+   - A clean working tree does not prove Kimi made no changes; check `committedChanges` for commits and diffs.
+   - `workingTreeChanges` may include pre-existing user work listed in `initialDirtyPaths`.
+   - `committedChanges.available: false` means evidence is unavailable, not empty; use `unavailableReason` and direct `git log`/`git diff` when needed.
+6. Review against acceptance criteria.
+7. Send precise follow-up feedback to Kimi if review fails.
+8. Independently verify before declaring completion.

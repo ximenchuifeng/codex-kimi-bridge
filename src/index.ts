@@ -80,7 +80,7 @@ export async function main(): Promise<void> {
   const preflight = new KimiPreflight(config, http);
   const kimi = new KimiClient(http);
   const handlers = createToolHandlers({ kimi, config, preflight });
-  const server = new McpServer({ name: 'codex-kimi-bridge', version: '0.2.0' });
+  const server = new McpServer({ name: 'codex-kimi-bridge', version: '0.3.0' });
 
   server.tool(
     'kimi_delegate_task',

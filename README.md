@@ -46,7 +46,7 @@ python3 /Users/ximenchuifeng/.codex/skills/.system/plugin-creator/scripts/update
 codex plugin add kimi-delegate@codex-kimi-bridge-local
 ```
 
-Open a new Codex task after reinstalling. The helper adds a local `+codex.<timestamp>` cachebuster; release commits keep the plugin version as plain semantic version `0.2.0`. Do not hand-edit `.agents/plugins/marketplace.json` to refresh an installed plugin.
+Open a new Codex task after reinstalling. The helper adds a local `+codex.<timestamp>` cachebuster; release commits keep the plugin version as plain semantic version `0.3.0`. Do not hand-edit `.agents/plugins/marketplace.json` to refresh an installed plugin.
 
 Upgrading a cloned checkout only requires pulling the desired release and reinstalling the same plugin. You do not need to re-add an already configured marketplace.
 
@@ -332,7 +332,26 @@ No token or authorization information is returned by the dedupe search.
   - `additions`
   - `deletions`
   - `diffsWithContent`: number of diffs whose `diff` string is non-empty.
+  - `committed`: per-source stats for changes already committed by Kimi from the delegation baseline to current `HEAD`.
+  - `workingTree`: per-source stats for current staged/unstaged/untracked changes.
 - `reviewChecklist`: a list of reminders for Codex, such as checking scope, tests, unrelated changes, and whether to call `kimi_continue_task`.
+
+The `handoff` now separates committed and working-tree evidence:
+
+- `baseCommit`: the Git baseline captured when the session was created.
+- `headCommit`: the current `HEAD` commit when the handoff was generated.
+- `commits`: commit summaries between `baseCommit` and `headCommit`.
+- `initialDirtyPaths`: paths that were already dirty at delegation time (diagnostic only; not subtracted from later working-tree changes).
+- `committedChanges`: changes already committed by Kimi (`available: false` with `unavailableReason` for legacy sessions or invalid ancestry).
+- `workingTreeChanges`: current working-tree/staging changes.
+- `changedFiles`, `additions`, `deletions`, and `diffs` remain as aggregate compatibility fields across both sources.
+
+Important review semantics:
+
+- A clean working tree does **not** prove Kimi made no changes; inspect `committedChanges`.
+- `workingTreeChanges` may include pre-existing user work listed in `initialDirtyPaths`.
+- `available: false` means the committed evidence is unavailable, not that there are zero committed changes. Use `unavailableReason` and direct `git log`/`git diff` when necessary.
+- Old sessions created before this feature lack a baseline and return `baseline_unavailable` for `committedChanges`.
 
 Use this tool to normalize the review step instead of manually reading `handoff` and `diffs`. When `kimi_delegate_and_wait` already returned `idle` with an embedded `reviewPackage`, you can review that package directly; call `kimi_review_package` afterward only if you need to re-fetch the latest handoff for the same session.
 

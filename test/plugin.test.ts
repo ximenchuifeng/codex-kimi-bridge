@@ -82,7 +82,7 @@ describe('Codex plugin package', () => {
     );
 
     expect(packageJson).toMatchObject({
-      version: '0.2.0',
+      version: '0.3.0',
       license: 'MIT',
       author: 'ximenchuifeng',
       repository: {
@@ -94,7 +94,7 @@ describe('Codex plugin package', () => {
     });
     expect(manifest).toMatchObject({
       name: 'kimi-delegate',
-      version: '0.2.0',
+      version: '0.3.0',
       license: 'MIT',
       homepage: 'https://github.com/ximenchuifeng/codex-kimi-bridge#readme',
       repository: 'https://github.com/ximenchuifeng/codex-kimi-bridge',
@@ -105,6 +105,15 @@ describe('Codex plugin package', () => {
       interface: { developerName: 'ximenchuifeng' },
     });
     expect(existsSync(resolve('LICENSE'))).toBe(true);
+
+    const readme = readFileSync(resolve('README.md'), 'utf8');
+    const skill = readFileSync(join(pluginRoot, 'skills/kimi-delegate/SKILL.md'), 'utf8');
+    expect(readme).toContain('committedChanges');
+    expect(readme).toContain('workingTreeChanges');
+    expect(readme).toContain('initialDirtyPaths');
+    expect(skill).toContain('committedChanges');
+    expect(skill).toContain('workingTreeChanges');
+    expect(skill).toContain('initialDirtyPaths');
   });
 
   it('uses a basename-aware guard so the bundle starts main exactly once', () => {

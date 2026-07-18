@@ -122,6 +122,23 @@ Use these from Codex when the plugin is loaded:
 
 Delegate and review tools return `webUrl`, which can be opened in Kimi Web to watch the session.
 
+## Reviewing handoffs
+
+`kimi_get_handoff`, `kimi_review_package`, and the embedded `reviewPackage` from `kimi_delegate_and_wait` expose both committed and working-tree evidence:
+
+- `committedChanges`: changes already committed by Kimi from the delegation baseline to current `HEAD`.
+- `workingTreeChanges`: current staged, unstaged, and untracked changes.
+- `initialDirtyPaths`: paths that were already dirty when the session was created (diagnostic only).
+- Top-level `changedFiles`, `additions`, `deletions`, and `diffs` aggregate both sources for compatibility.
+
+Review rules:
+
+- Do not infer "no changes" from a clean working tree alone. Inspect `committedChanges` for commits and file diffs.
+- `workingTreeChanges` may include pre-existing user work; compare with `initialDirtyPaths`.
+- `available: false` in `committedChanges` means evidence is unavailable, not that there are zero committed changes. Read `unavailableReason` and use direct `git log`/`git diff` when needed.
+- Legacy sessions created before this feature lack a baseline and return `baseline_unavailable`.
+- Review both change sets before acceptance and use `kimi_continue_task` for fixes.
+
 ## Handling interrupted or duplicate sessions
 
 If a previous `kimi_delegate_and_wait` was interrupted (for example, by pressing Esc), or if you are unsure whether a task is already running, the recommended approach is to pass `dedupe` to `kimi_delegate_and_wait`:
@@ -161,7 +178,7 @@ codex plugin list | rg 'kimi-delegate|codex-kimi-bridge-local'
 Expected status:
 
 ```text
-kimi-delegate@codex-kimi-bridge-local  installed, enabled  0.2.0
+kimi-delegate@codex-kimi-bridge-local  installed, enabled  0.3.0
 ```
 
 ## Completed MVP Capabilities

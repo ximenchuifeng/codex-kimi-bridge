@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { KimiApiError, KimiNetworkError } from '../src/errors.js';
 import { isDirectExecution, runToolHandler } from '../src/index.js';
 
@@ -72,5 +74,12 @@ describe('runToolHandler', () => {
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.error).toBe('boom');
     expect(parsed.code).toBe('UNKNOWN');
+  });
+});
+
+describe('MCP server identity', () => {
+  it('reports plugin version 0.3.0 in the source', () => {
+    const source = readFileSync(resolve('src/index.ts'), 'utf8');
+    expect(source).toContain("version: '0.3.0'");
   });
 });
