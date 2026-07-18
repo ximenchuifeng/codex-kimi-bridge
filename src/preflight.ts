@@ -22,6 +22,8 @@ export interface BridgeStatus {
   diagnostics: string[];
   nextActions: string[];
   commands?: string[];
+  serverVersion?: string;
+  backend?: string;
 }
 
 export interface PreflightOptions {

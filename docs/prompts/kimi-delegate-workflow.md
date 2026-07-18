@@ -2,6 +2,8 @@
 
 Use these prompts when the user wants Codex to coordinate work while Kimi Code performs implementation.
 
+The bridge accepts both legacy Kimi Session `status` responses and Kimi 0.27+ `busy` / `pending_interaction` / `last_turn_reason` responses. All lifecycle decisions use one normalized runtime status. `failed` is a terminal status: it produces no success `reviewPackage`; inspect `webUrl` and continue the same session with `kimi_continue_task` when appropriate. `failed` and `aborted` sessions are never automatically reused by dedupe.
+
 ## User To Codex
 
 Use this short prompt for normal work:
@@ -134,14 +136,15 @@ Codex should shape delegated work like this:
 
 1. Call `kimi_bridge_status` when diagnosing readiness.
 2. If a previous delegate was interrupted, or you suspect a duplicate/running session, prefer passing `dedupe` to `kimi_delegate_and_wait` with a stable `titleContains` substring and the default `reuseIfStatus`.
-3. If you suspect an `aborted` session, call `kimi_find_recent_session` or `kimi_recent_sessions`, inspect the `webUrl`, and use `kimi_continue_task` to resume it. `kimi_delegate_and_wait` will never automatically reuse an aborted session.
+3. If you suspect an `aborted` or `failed` session, call `kimi_find_recent_session` or `kimi_recent_sessions`, inspect the `webUrl`, and use `kimi_continue_task` to resume it. `kimi_delegate_and_wait` will never automatically reuse an aborted or failed session.
 4. If you need more control for other cases, call `kimi_find_recent_session` (search by title) or `kimi_recent_sessions` first and inspect `status`, `title`, and `webUrl` before delegating again.
 5. Call `kimi_delegate_and_wait` for normal implementation work.
 6. If `wait.status` is `idle`, review the embedded `reviewPackage`.
 7. If `wait.status` is `timeout`, keep `sessionId` and call `kimi_wait_until_idle` later.
-8. If blocked on approval or question, resolve it in Kimi Web and continue the same session.
-9. Use `kimi_continue_task` for Codex review feedback.
-10. Run local verification before accepting work.
+8. If `wait.status` is `failed`, fix the cause and continue the same session with `kimi_continue_task`.
+9. If blocked on approval or question, resolve it in Kimi Web and continue the same session.
+10. Use `kimi_continue_task` for Codex review feedback.
+11. Run local verification before accepting work.
 
 ## Dedupe guard template
 
@@ -168,6 +171,6 @@ Guidelines:
 - Pick a `titleContains` value that is stable across retries but specific enough to avoid matching unrelated sessions.
 - Omit `dedupe` for one-off exploratory tasks where duplicates are not a concern.
 - When `dedupe` returns an existing session, follow `suggestedNextActions` instead of immediately calling `kimi_delegate_task` again.
-- `dedupe` only reuses `running`, `idle`, `awaiting_approval`, and `awaiting_question` sessions. For `aborted` sessions, inspect the `webUrl` and use `kimi_continue_task`.
+- `dedupe` only reuses `running`, `idle`, `awaiting_approval`, and `awaiting_question` sessions. For `aborted` or `failed` sessions, inspect the `webUrl` and use `kimi_continue_task`.
 - By default, `dedupe` only reuses sessions whose `metadata.cwd` matches the `cwd` you pass in. This prevents accidentally reusing a session from a different project or workspace. Only add `matchAnyCwd: true` when you intentionally want to recover a session from another workspace; for daily use, leave it out.
 - Add `includeSummary: true` when recovering from an interruption or deciding whether to reuse an old session; it returns the last user/assistant message and message count for the matched session and any skipped candidates. Leave it out for normal calls to avoid the extra message fetch.

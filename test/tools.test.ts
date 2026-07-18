@@ -354,6 +354,27 @@ describe('tool handlers', () => {
     expect(preflight.ensureReady).not.toHaveBeenCalled();
   });
 
+  it('adds safe Kimi metadata to a ready bridge status', async () => {
+    const kimi = { ...makeKimi(), getMeta: vi.fn(async () => ({ server_version: '0.27.0', backend: 'v2' })) };
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    const result = await handlers.kimi_bridge_status();
+
+    expect(result.serverVersion).toBe('0.27.0');
+    expect(result.backend).toBe('v2');
+  });
+
+  it('keeps bridge status available when meta cannot be read', async () => {
+    const kimi = { ...makeKimi(), getMeta: vi.fn(async () => { throw new Error('meta unavailable'); }) };
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    const result = await handlers.kimi_bridge_status();
+
+    expect(result.status).toBe('ready');
+    expect(result.serverVersion).toBeUndefined();
+    expect(result.diagnostics).toContain('meta unavailable');
+  });
+
   it('fails fast when no model is configured', async () => {
     const kimi = makeKimi({
       resolveDefaultModel: vi.fn(async () => undefined),

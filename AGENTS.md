@@ -76,6 +76,8 @@ Default server:
 http://127.0.0.1:58627
 ```
 
+The bridge supports both legacy Kimi Session `status` responses and Kimi 0.27+ `busy` / `pending_interaction` / `last_turn_reason` responses. All lifecycle decisions normalize these into one Bridge runtime status. `kimi_bridge_status` may expose safe `serverVersion` and `backend` metadata from `/api/v1/meta`, but this metadata is diagnostic only and never selects the compatibility path.
+
 Recommended daily setup:
 
 ```bash
@@ -128,7 +130,7 @@ If a previous `kimi_delegate_and_wait` was interrupted (for example, by pressing
 
 When recovering from an interruption or deciding whether to reuse an old session, set `includeSummary: true` on `kimi_find_recent_session` or on `kimi_delegate_and_wait.dedupe` to see the last user/assistant message and message count. Leave it `false` by default to avoid the extra message fetch.
 
-`dedupe` only reuses sessions in `running`, `idle`, `awaiting_approval`, or `awaiting_question` status. It never automatically reuses an `aborted` session. If the matched session is `aborted`, inspect the `webUrl` and use `kimi_continue_task` to resume it manually; do not expect `kimi_delegate_and_wait` to resume it automatically.
+`dedupe` only reuses sessions in `running`, `idle`, `awaiting_approval`, or `awaiting_question` status. It never automatically reuses an `aborted` or `failed` session. If the matched session is `aborted` or `failed`, inspect the `webUrl` and use `kimi_continue_task` to resume it manually; do not expect `kimi_delegate_and_wait` to resume it automatically.
 
 By default, `dedupe` only reuses a session when its `metadata.cwd` matches the `cwd` passed to `kimi_delegate_and_wait`. This prevents accidentally reusing a session from a different project or workspace even when the title matches. Only pass `matchAnyCwd: true` when you intentionally want to recover a session from another workspace; for daily use, keep the default `cwd-safe` behavior.
 
@@ -164,7 +166,7 @@ kimi-delegate@codex-kimi-bridge-local  installed, enabled  0.1.0
 - Kimi server auth is handled via server token.
 - Kimi server preflight and auto-start work.
 - Successful preflight checks are short-cached by `KIMI_PREFLIGHT_CACHE_MS`.
-- `kimi_bridge_status` reports `webBaseUrl`, `canOpenWeb`, `status`, `nextActions`, and diagnostics without leaking token values.
+- `kimi_bridge_status` reports `webBaseUrl`, `canOpenWeb`, `status`, `nextActions`, and diagnostics without leaking token values, and may include safe `serverVersion`/`backend` metadata from `/api/v1/meta`.
 - `kimi_delegate_and_wait` returns an embedded `reviewPackage` on idle results.
 - `kimi_review_package` can re-fetch review material for an existing session before commit.
 - Delegate/continue responses include Kimi Web session URLs.
@@ -172,6 +174,8 @@ kimi-delegate@codex-kimi-bridge-local  installed, enabled  0.1.0
 - `kimi_delegate_and_wait.dedupe` prevents duplicate sessions, defaults to cwd-safe matching, and can include cleaned session summaries for recovery decisions.
 - Session summaries skip internal reminder/control messages and redact token-like values.
 - Handoff expands untracked directories into concrete file paths when possible.
+- Bridge runtime status normalizes both legacy `status` responses and Kimi 0.27+ `busy`/`pending_interaction`/`last_turn_reason` responses.
+- `failed` is an explicit terminal status: it receives no success `reviewPackage` and is not automatically reused by dedupe.
 - End-to-end smoke test passed: Codex delegated a file creation to Kimi, read handoff/diff, reviewed the result, then delegated cleanup.
 
 ## Good Next Tasks

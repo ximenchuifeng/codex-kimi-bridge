@@ -551,7 +551,21 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
 
   const handlers: ToolHandlers = {
     async kimi_bridge_status() {
-      return deps.preflight.getStatus();
+      const status = await deps.preflight.getStatus();
+      if (!status.healthzOk || !status.authOk) return status;
+      try {
+        const meta = await deps.kimi.getMeta();
+        return {
+          ...status,
+          ...(meta.server_version ? { serverVersion: meta.server_version } : {}),
+          ...(meta.backend ? { backend: meta.backend } : {}),
+        };
+      } catch {
+        return {
+          ...status,
+          diagnostics: [...status.diagnostics, 'meta unavailable'],
+        };
+      }
     },
 
     async kimi_recent_sessions(input: RecentSessionsInput) {

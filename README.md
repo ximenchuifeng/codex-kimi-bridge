@@ -78,9 +78,17 @@ The `kimi_bridge_status` tool always performs a live check and does not use or u
   - `auth_failed`: a safe check such as `test -f ~/.kimi-code/server.token && echo "token file exists" || echo "token file missing"`, or a hint when the token comes from `KIMI_SERVER_TOKEN`
   - if the bridge/plugin was just changed: `pnpm build` and `codex plugin add kimi-delegate@codex-kimi-bridge-local`
 - `diagnostics`: technical messages from the latest live checks. Token values are never included.
+- `serverVersion` *(optional)*: the Kimi server version from `/api/v1/meta`, when available.
+- `backend` *(optional)*: the Kimi server backend from `/api/v1/meta`, when available.
 - `tokenSource`, `autoStart`, `kimiCommand`, `preflightCacheMs`, `cacheFresh`, `cacheAgeMs`, `cachedUntil`: configuration and cache metadata.
 
 `kimi_bridge_status` is safe to call at any time: it does not trigger auto-start, refresh the token, or modify the success cache.
+
+The bridge accepts both legacy Kimi Session `status` responses and Kimi 0.27+ `busy` / `pending_interaction` / `last_turn_reason` responses. All lifecycle decisions use one normalized runtime status.
+
+`failed` is a terminal Bridge status. A failed delegate does not produce a successful `reviewPackage`; open `webUrl`, inspect the failure, and use `kimi_continue_task` to continue the same session when recovery is appropriate. `failed` and `aborted` sessions are never automatically reused by dedupe.
+
+`kimi_bridge_status` may include `serverVersion` and `backend` from `/api/v1/meta`. These fields are diagnostic only and never select the compatibility path.
 
 ### Local smoke test with auth disabled
 
@@ -161,7 +169,7 @@ Use `kimi_recent_sessions` to inspect recent Kimi sessions before delegating mor
 Input fields (all optional):
 
 - `pageSize`: number of sessions to return. Default: `10`.
-- `status`: filter by session status such as `idle`, `running`, `awaiting_approval`, `awaiting_question`, or `aborted`.
+- `status`: filter by session status such as `idle`, `running`, `awaiting_approval`, `awaiting_question`, `aborted`, or `failed`.
 - `includeArchive`: include archived sessions.
 - `excludeEmpty`: exclude sessions with no messages.
 
@@ -182,7 +190,7 @@ Use `kimi_find_recent_session` when you want to recover a session after an inter
 Input fields:
 
 - `titleContains` *(required)*: substring to search for in session titles. Case-insensitive. Leading/trailing whitespace is trimmed; an empty or whitespace-only value returns a clear error.
-- `status`: filter by session status such as `idle`, `running`, `awaiting_approval`, `awaiting_question`, or `aborted`.
+- `status`: filter by session status such as `idle`, `running`, `awaiting_approval`, `awaiting_question`, `aborted`, or `failed`.
 - `pageSize`: number of recent sessions to inspect. Default: `20`.
 - `includeArchive`: include archived sessions.
 - `excludeEmpty`: exclude sessions with no messages.
@@ -211,6 +219,7 @@ Status-based guidance:
 - `running`: wait with `kimi_wait_until_idle` or open the `webUrl`.
 - `idle`: call `kimi_review_package` or open the `webUrl`.
 - `aborted`: open the `webUrl` to inspect the reason, then use `kimi_continue_task` if needed.
+- `failed`: open the `webUrl` to inspect the failure, then use `kimi_continue_task` after fixing the cause.
 - `awaiting_approval` / `awaiting_question`: resolve the approval or question in Kimi Web, then continue waiting.
 
 No token or authorization information is returned.
@@ -222,10 +231,10 @@ Use `kimi_delegate_and_wait` when you want the bridge to perform the mechanical 
 The result includes:
 
 - `sessionId`, `promptId`, `submitStatus`, and `webUrl`
-- `wait`, including `idle`, `timeout`, `awaiting_approval`, or `awaiting_question`
+- `wait`, including `idle`, `timeout`, `awaiting_approval`, `awaiting_question`, `aborted`, or `failed`
 - `handoff` and `changedFiles` only when `wait.status` is `idle`
 - `reviewPackage` only when `wait.status` is `idle`, with the same structure as `kimi_review_package`
-- `diagnostics` only when `wait.status` is `timeout` or `aborted`
+- `diagnostics` only when `wait.status` is `timeout`, `aborted`, or `failed`
 
 When `wait.status` is `idle`, the returned `reviewPackage` is ready for Codex review immediately. It contains `sessionId`, `webUrl`, `handoff`, `changedFiles`, `diffStats`, and `reviewChecklist`, and it shares the same `handoff` object as the top-level `handoff` field. Codex should prefer using this embedded review package for the first review so that diff content is not lost before a separate `kimi_review_package` call.
 
@@ -235,11 +244,11 @@ If the result is `timeout`, `diagnostics` contains:
 - `lastAssistantMessage`: the content of the most recent assistant message, or an empty string
 - `suggestedNextActions`: guidance to call `kimi_wait_until_idle` or open `webUrl` in the browser
 
-If the result is `aborted`, `diagnostics` contains the same fields, with `suggestedNextActions` recommending opening `webUrl` to inspect the abort reason and using `kimi_continue_task` to retry or add instructions.
+If the result is `aborted` or `failed`, `diagnostics` contains the same fields, with `suggestedNextActions` recommending opening `webUrl` to inspect the reason and using `kimi_continue_task` to retry or add instructions.
 
 If the server cannot fetch messages for diagnostics, `recentMessages` is empty, `messagesUnavailable` is `true`, and `messageError` contains a safe error message with no token values. `suggestedNextActions` is still returned.
 
-If the result is `timeout`, keep the `sessionId` and call `kimi_wait_until_idle` or `kimi_get_handoff` later. If it is blocked, resolve the approval/question in Kimi and continue the same session. Non-`idle` results do not include `handoff` or `reviewPackage`.
+If the result is `timeout`, keep the `sessionId` and call `kimi_wait_until_idle` or `kimi_get_handoff` later. If it is `failed`, fix the cause before continuing the same session with `kimi_continue_task`. If it is blocked, resolve the approval/question in Kimi and continue the same session. Non-`idle` results do not include `handoff` or `reviewPackage`.
 
 #### Dedupe guard
 
@@ -248,7 +257,7 @@ If the result is `timeout`, keep the `sessionId` and call `kimi_wait_until_idle`
 Input fields under `dedupe`:
 
 - `titleContains` *(required)*: substring to search for in session titles. Case-insensitive. Leading/trailing whitespace is trimmed; an empty or whitespace-only value returns a clear error.
-- `status`: filter by session status such as `idle`, `running`, `awaiting_approval`, `awaiting_question`, or `aborted`.
+- `status`: filter by session status such as `idle`, `running`, `awaiting_approval`, `awaiting_question`, `aborted`, or `failed`.
 - `pageSize`: number of recent sessions to inspect. Default: `20`.
 - `includeArchive`: include archived sessions.
 - `excludeEmpty`: exclude sessions with no messages.
@@ -258,7 +267,7 @@ Input fields under `dedupe`:
 
 By default, dedupe only reuses a session if its `metadata.cwd` matches the `cwd` passed to `kimi_delegate_and_wait`. This prevents accidentally reusing a session from a different project or workspace, even when the title matches. Trailing-slash differences are normalized, so `/repo` and `/repo/` are treated as the same directory. Only set `matchAnyCwd: true` when you intentionally want to recover a session from another workspace.
 
-Only the following statuses can actually be reused automatically: `running`, `idle`, `awaiting_approval`, and `awaiting_question`. The bridge will never automatically reuse an `aborted` session, even if you include `aborted` in `reuseIfStatus`. If you find an aborted session, inspect the `webUrl` and use `kimi_continue_task` instead of relying on `kimi_delegate_and_wait` to resume it.
+Only the following statuses can actually be reused automatically: `running`, `idle`, `awaiting_approval`, and `awaiting_question`. The bridge will never automatically reuse an `aborted` or `failed` session, even if you include it in `reuseIfStatus`. If you find an aborted or failed session, inspect the `webUrl` and use `kimi_continue_task` instead of relying on `kimi_delegate_and_wait` to resume it.
 
 Result behavior:
 
@@ -266,7 +275,7 @@ Result behavior:
 - If no matching session is found, the tool delegates normally and includes `dedupe.checked=true`, `dedupe.matched=false`, `dedupe.reused=false` in the result.
 - If a matching session is `running`, `idle`, `awaiting_approval`, or `awaiting_question`, and that status is in `reuseIfStatus`, and the session `cwd` matches (or `matchAnyCwd` is `true`), the result contains the existing `sessionId`, `webUrl`, and appropriate wait state. No new session is created and no prompt is submitted. `dedupe.reused` is `true` and `dedupe.cwdMatched` indicates whether the reuse happened within the same `cwd`.
 - If a matching session is supported for reuse but its status is not in `reuseIfStatus`, the tool delegates normally and reports `dedupe.matched=true`, `dedupe.reused=false`, `dedupe.reason="status_not_reusable"`.
-- If a matching session is not supported for reuse at all (for example, `aborted`), the tool delegates normally and reports `dedupe.matched=true`, `dedupe.reused=false`, `dedupe.reason="status_not_supported"`. For `aborted` matches, open the `webUrl` to inspect the cause and use `kimi_continue_task` if needed.
+- If a matching session is not supported for reuse at all (for example, `aborted` or `failed`), the tool delegates normally and reports `dedupe.matched=true`, `dedupe.reused=false`, `dedupe.reason="status_not_supported"`. For `aborted` or `failed` matches, open the `webUrl` to inspect the cause and use `kimi_continue_task` if needed.
 - If one or more title matches were found but all were excluded because their `cwd` differed, the tool delegates normally and reports `dedupe.matched=false`, `dedupe.reused=false`, `dedupe.reason="cwd_mismatch"`, plus `dedupe.skippedCandidates` for diagnostics.
 
 No token or authorization information is returned by the dedupe search.
