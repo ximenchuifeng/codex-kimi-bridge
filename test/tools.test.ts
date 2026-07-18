@@ -324,6 +324,147 @@ describe('tool handlers', () => {
     ]);
   });
 
+  it('exposes the selected review workspace in the handoff', async () => {
+    const baseline = {
+      schemaVersion: 1 as const,
+      baseCommit: 'a'.repeat(40),
+      initialDirtyPaths: [],
+    };
+    const kimi = makeKimi({
+      getRuntimeStatus: vi.fn(async () => 'idle'),
+      listMessages: vi.fn(async () => []),
+      getGitStatus: vi.fn(async () => ({ entries: {}, additions: 0, deletions: 0 })),
+      getSession: vi.fn(async () => ({
+        id: 's1',
+        title: 'test',
+        status: 'idle',
+        metadata: { cwd: '/repo', codex_kimi_bridge: { schema_version: 1, base_commit: baseline.baseCommit, initial_dirty_paths: [] } },
+        agent_config: {},
+        last_seq: 0,
+      })),
+    });
+    const gitInspector: GitInspector = {
+      captureBaseline: vi.fn<GitInspector['captureBaseline']>(async () => ({ available: false, unavailableReason: 'not_a_git_repository' })),
+      collectCommittedChanges: vi.fn<GitInspector['collectCommittedChanges']>(async () => ({
+        baseCommit: baseline.baseCommit,
+        headCommit: 'b'.repeat(40),
+        reviewWorkspace: '/repo/.worktrees/feature',
+        commits: [{ sha: 'b'.repeat(40), shortSha: 'b'.repeat(7), subject: 'feat: nested work' }],
+        changeSet: {
+          available: true,
+          changedFiles: ['feature.txt'],
+          additions: 5,
+          deletions: 0,
+          diffs: [{ path: 'feature.txt', diff: '@@ feature', source: 'committed' }],
+          truncatedPaths: [],
+        },
+      })),
+    };
+    const handlers = createToolHandlers({ kimi, config: makeConfig(), preflight: makePreflight(), gitInspector });
+
+    const handoff = await handlers.kimi_get_handoff({ sessionId: 's1' });
+
+    expect(handoff.reviewWorkspace).toBe('/repo/.worktrees/feature');
+    expect(handoff.baseCommit).toBe(baseline.baseCommit);
+    expect(handoff.commits).toHaveLength(1);
+    expect(handoff.committedChanges.changedFiles).toEqual(['feature.txt']);
+  });
+
+  it('marks working-tree changes unavailable when the review workspace differs from the session cwd', async () => {
+    const baseline = {
+      schemaVersion: 1 as const,
+      baseCommit: 'a'.repeat(40),
+      initialDirtyPaths: [],
+    };
+    const kimi = makeKimi({
+      getRuntimeStatus: vi.fn(async () => 'idle'),
+      listMessages: vi.fn(async () => []),
+      getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 2, deletions: 1 })),
+      getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ working' })),
+      getSession: vi.fn(async () => ({
+        id: 's1',
+        title: 'test',
+        status: 'idle',
+        metadata: { cwd: '/repo', codex_kimi_bridge: { schema_version: 1, base_commit: baseline.baseCommit, initial_dirty_paths: [] } },
+        agent_config: {},
+        last_seq: 0,
+      })),
+    });
+    const gitInspector: GitInspector = {
+      captureBaseline: vi.fn<GitInspector['captureBaseline']>(async () => ({ available: false, unavailableReason: 'not_a_git_repository' })),
+      collectCommittedChanges: vi.fn<GitInspector['collectCommittedChanges']>(async () => ({
+        baseCommit: baseline.baseCommit,
+        headCommit: 'b'.repeat(40),
+        reviewWorkspace: '/repo/.worktrees/feature',
+        commits: [{ sha: 'b'.repeat(40), shortSha: 'b'.repeat(7), subject: 'feat: nested work' }],
+        changeSet: {
+          available: true,
+          changedFiles: ['feature.txt'],
+          additions: 5,
+          deletions: 0,
+          diffs: [{ path: 'feature.txt', diff: '@@ feature', source: 'committed' }],
+          truncatedPaths: [],
+        },
+      })),
+    };
+    const handlers = createToolHandlers({ kimi, config: makeConfig(), preflight: makePreflight(), gitInspector });
+
+    const handoff = await handlers.kimi_get_handoff({ sessionId: 's1' });
+
+    expect(handoff.reviewWorkspace).toBe('/repo/.worktrees/feature');
+    expect(handoff.workingTreeChanges.available).toBe(false);
+    expect(handoff.workingTreeChanges.unavailableReason).toBe('review_workspace_mismatch');
+    expect(handoff.workingTreeChanges.changedFiles).toEqual([]);
+    expect(handoff.changedFiles).toEqual(['feature.txt']);
+  });
+
+  it('keeps working-tree changes available when the review workspace matches the session cwd', async () => {
+    const baseline = {
+      schemaVersion: 1 as const,
+      baseCommit: 'a'.repeat(40),
+      initialDirtyPaths: [],
+    };
+    const kimi = makeKimi({
+      getRuntimeStatus: vi.fn(async () => 'idle'),
+      listMessages: vi.fn(async () => []),
+      getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 2, deletions: 1 })),
+      getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ working' })),
+      getSession: vi.fn(async () => ({
+        id: 's1',
+        title: 'test',
+        status: 'idle',
+        metadata: { cwd: '/repo', codex_kimi_bridge: { schema_version: 1, base_commit: baseline.baseCommit, initial_dirty_paths: [] } },
+        agent_config: {},
+        last_seq: 0,
+      })),
+    });
+    const gitInspector: GitInspector = {
+      captureBaseline: vi.fn<GitInspector['captureBaseline']>(async () => ({ available: false, unavailableReason: 'not_a_git_repository' })),
+      collectCommittedChanges: vi.fn<GitInspector['collectCommittedChanges']>(async () => ({
+        baseCommit: baseline.baseCommit,
+        headCommit: 'b'.repeat(40),
+        reviewWorkspace: '/repo',
+        commits: [{ sha: 'b'.repeat(40), shortSha: 'b'.repeat(7), subject: 'feat' }],
+        changeSet: {
+          available: true,
+          changedFiles: ['committed.ts'],
+          additions: 3,
+          deletions: 0,
+          diffs: [{ path: 'committed.ts', diff: '@@ committed', source: 'committed' }],
+          truncatedPaths: [],
+        },
+      })),
+    };
+    const handlers = createToolHandlers({ kimi, config: makeConfig(), preflight: makePreflight(), gitInspector });
+
+    const handoff = await handlers.kimi_get_handoff({ sessionId: 's1' });
+
+    expect(handoff.reviewWorkspace).toBe('/repo');
+    expect(handoff.workingTreeChanges.available).toBe(true);
+    expect(handoff.workingTreeChanges.changedFiles).toEqual(['src/a.ts']);
+    expect(handoff.changedFiles).toEqual(['committed.ts', 'src/a.ts']);
+  });
+
   it('builds handoff status from the normalized Session resource', async () => {
     const kimi = {
       ...makeKimi(),

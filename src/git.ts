@@ -1,16 +1,23 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import path from 'node:path';
 import type { CommitSummary, FileDiff, HandoffChangeSet } from './handoff.js';
 
 const execFileAsync = promisify(execFile);
 
 export const OBJECT_ID_RE = /^[0-9a-fA-F]{40}$|^[0-9a-fA-F]{64}$/;
 
+export interface WorktreeSnapshot {
+  path: string;
+  headCommit: string;
+}
+
 export interface GitBaseline {
   schemaVersion: 1;
   baseCommit: string;
   baseBranch?: string;
   initialDirtyPaths: string[];
+  worktrees?: WorktreeSnapshot[];
 }
 
 export type BaselineCaptureResult =
@@ -20,8 +27,12 @@ export type BaselineCaptureResult =
 export interface CommittedChangeResult {
   baseCommit?: string;
   headCommit?: string;
+  reviewWorkspace?: string;
   commits: CommitSummary[];
   changeSet: HandoffChangeSet;
+  diagnostics?: {
+    candidates?: Array<{ path: string; headCommit: string; baselineHeadCommit?: string | null }>;
+  };
 }
 
 export interface GitInspector {
@@ -34,7 +45,8 @@ type UnavailableReason =
   | 'not_a_git_repository'
   | 'head_unavailable'
   | 'base_not_ancestor'
-  | 'git_command_failed';
+  | 'git_command_failed'
+  | 'ambiguous_worktrees';
 
 function isBufferOutput(output: unknown): output is Buffer {
   return Buffer.isBuffer(output);
@@ -66,6 +78,29 @@ function parseNulStatus(buffer: Buffer): Array<{ path: string; status: string }>
   return entries;
 }
 
+function parseWorktreeList(buffer: Buffer): WorktreeSnapshot[] {
+  const text = buffer.toString('utf8');
+  // Records are separated by double NUL bytes; each line inside a record is
+  // NUL-terminated. The final record also ends with a double NUL.
+  const records = text.split('\0\0').filter((record) => record.length > 0);
+  const worktrees: WorktreeSnapshot[] = [];
+  for (const record of records) {
+    let worktreePath: string | undefined;
+    let headCommit: string | undefined;
+    for (const line of record.split('\0')) {
+      if (line.startsWith('worktree ')) {
+        worktreePath = line.slice('worktree '.length);
+      } else if (line.startsWith('HEAD ')) {
+        headCommit = line.slice('HEAD '.length);
+      }
+    }
+    if (worktreePath && headCommit && OBJECT_ID_RE.test(headCommit)) {
+      worktrees.push({ path: worktreePath, headCommit });
+    }
+  }
+  return worktrees;
+}
+
 export class NodeGitInspector implements GitInspector {
   private readonly timeoutMs: number;
   private readonly maxOutputBytes: number;
@@ -79,6 +114,11 @@ export class NodeGitInspector implements GitInspector {
     // Keep commit lists, name/status, and stat data readable even when the
     // caller configures a very small patch limit.
     return Math.max(this.maxOutputBytes, 1_048_576);
+  }
+
+  private normalizeWorktreePath(p: string): string {
+    const normalized = path.normalize(p);
+    return normalized.endsWith('/') && normalized.length > 1 ? normalized.slice(0, -1) : normalized;
   }
 
   private async git(cwd: string, args: string[], maxBuffer?: number): Promise<Buffer> {
@@ -134,6 +174,12 @@ export class NodeGitInspector implements GitInspector {
       }
     }
 
+    let worktrees: WorktreeSnapshot[] | undefined;
+    const worktreeResult = await this.tryGit(cwd, ['worktree', 'list', '--porcelain', '-z'], this.metadataMaxBuffer);
+    if (worktreeResult.ok) {
+      worktrees = parseWorktreeList(worktreeResult.stdout);
+    }
+
     return {
       available: true,
       baseline: {
@@ -141,7 +187,66 @@ export class NodeGitInspector implements GitInspector {
         baseCommit,
         baseBranch,
         initialDirtyPaths: initialDirtyPaths.sort(),
+        worktrees,
       },
+    };
+  }
+
+  private async resolveReviewWorkspace(
+    sessionCwd: string,
+    baseline: GitBaseline,
+  ): Promise<
+    | { kind: 'selected'; path: string }
+    | { kind: 'fallback'; path: string }
+    | {
+        kind: 'unavailable';
+        reason: UnavailableReason;
+        diagnostics?: { candidates: Array<{ path: string; headCommit: string; baselineHeadCommit?: string | null }> };
+      }
+  > {
+    if (!baseline.worktrees || baseline.worktrees.length === 0) {
+      return { kind: 'fallback', path: sessionCwd };
+    }
+
+    const listResult = await this.tryGit(sessionCwd, ['worktree', 'list', '--porcelain', '-z'], this.metadataMaxBuffer);
+    if (!listResult.ok) {
+      return { kind: 'fallback', path: sessionCwd };
+    }
+
+    const currentWorktrees = parseWorktreeList(listResult.stdout);
+    const baselineByPath = new Map(
+      baseline.worktrees.map((wt) => [this.normalizeWorktreePath(wt.path), wt]),
+    );
+    const candidates: Array<{ path: string; headCommit: string; baselineHeadCommit?: string | null }> = [];
+
+    for (const current of currentWorktrees) {
+      const normalizedPath = this.normalizeWorktreePath(current.path);
+      const baselineEntry = baselineByPath.get(normalizedPath);
+      if (baselineEntry) {
+        // Only worktrees that were at the baseline commit when delegation
+        // started and have since advanced are valid review workspaces.
+        if (baselineEntry.headCommit === baseline.baseCommit && current.headCommit !== baseline.baseCommit) {
+          candidates.push({ path: current.path, headCommit: current.headCommit, baselineHeadCommit: baselineEntry.headCommit });
+        }
+      } else {
+        // Worktrees created after delegation began are valid candidates when
+        // they have moved past the baseline commit.
+        if (current.headCommit !== baseline.baseCommit) {
+          candidates.push({ path: current.path, headCommit: current.headCommit, baselineHeadCommit: null });
+        }
+      }
+    }
+
+    if (candidates.length === 1) {
+      return { kind: 'selected', path: candidates[0].path };
+    }
+    if (candidates.length === 0) {
+      return { kind: 'fallback', path: sessionCwd };
+    }
+    return {
+      kind: 'unavailable',
+      reason: 'ambiguous_worktrees',
+      diagnostics: { candidates },
     };
   }
 
@@ -164,7 +269,19 @@ export class NodeGitInspector implements GitInspector {
       };
     }
 
-    const repoCheck = await this.tryGit(cwd, ['rev-parse', '--git-dir'], this.metadataMaxBuffer);
+    const resolution = await this.resolveReviewWorkspace(cwd, baseline);
+    if (resolution.kind === 'unavailable') {
+      return {
+        baseCommit: baseline.baseCommit,
+        headCommit: undefined,
+        commits: [],
+        changeSet: this.unavailableChangeSet(resolution.reason),
+        diagnostics: resolution.diagnostics,
+      };
+    }
+
+    const inspectCwd = resolution.path;
+    const repoCheck = await this.tryGit(inspectCwd, ['rev-parse', '--git-dir'], this.metadataMaxBuffer);
     if (!repoCheck.ok) {
       return {
         baseCommit: baseline.baseCommit,
@@ -174,7 +291,7 @@ export class NodeGitInspector implements GitInspector {
       };
     }
 
-    const headResult = await this.tryGit(cwd, ['rev-parse', 'HEAD'], this.metadataMaxBuffer);
+    const headResult = await this.tryGit(inspectCwd, ['rev-parse', 'HEAD'], this.metadataMaxBuffer);
     if (!headResult.ok) {
       return {
         baseCommit: baseline.baseCommit,
@@ -195,7 +312,7 @@ export class NodeGitInspector implements GitInspector {
     }
 
     const ancestorResult = await this.tryGit(
-      cwd,
+      inspectCwd,
       ['merge-base', '--is-ancestor', baseline.baseCommit, 'HEAD'],
       this.metadataMaxBuffer,
     );
@@ -217,13 +334,14 @@ export class NodeGitInspector implements GitInspector {
     }
 
     try {
-      const commits = await this.listCommits(cwd, baseline.baseCommit, headCommit);
-      const { changedFiles, additions, deletions } = await this.collectStats(cwd, baseline.baseCommit, headCommit);
-      const { diffs, truncatedPaths } = await this.collectPatches(cwd, baseline.baseCommit, headCommit);
+      const commits = await this.listCommits(inspectCwd, baseline.baseCommit, headCommit);
+      const { changedFiles, additions, deletions } = await this.collectStats(inspectCwd, baseline.baseCommit, headCommit);
+      const { diffs, truncatedPaths } = await this.collectPatches(inspectCwd, baseline.baseCommit, headCommit);
 
       return {
         baseCommit: baseline.baseCommit,
         headCommit,
+        reviewWorkspace: resolution.kind === 'selected' ? inspectCwd : undefined,
         commits,
         changeSet: {
           available: true,

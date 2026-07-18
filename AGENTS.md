@@ -129,6 +129,7 @@ Delegate and review tools return `webUrl`, which can be opened in Kimi Web to wa
 - `committedChanges`: changes already committed by Kimi from the delegation baseline to current `HEAD`.
 - `workingTreeChanges`: current staged, unstaged, and untracked changes.
 - `initialDirtyPaths`: paths that were already dirty when the session was created (diagnostic only).
+- `reviewWorkspace`: the worktree path whose `HEAD` advanced from the baseline and supplied `committedChanges`. When Kimi committed in a nested worktree, this reveals the real location of the commits.
 - Top-level `changedFiles`, `additions`, `deletions`, and `diffs` aggregate both sources for compatibility.
 
 Review rules:
@@ -136,6 +137,8 @@ Review rules:
 - Do not infer "no changes" from a clean working tree alone. Inspect `committedChanges` for commits and file diffs.
 - `workingTreeChanges` may include pre-existing user work; compare with `initialDirtyPaths`.
 - `available: false` in `committedChanges` means evidence is unavailable, not that there are zero committed changes. Read `unavailableReason` and use direct `git log`/`git diff` when needed.
+- If `reviewWorkspace` differs from the session `cwd`, `workingTreeChanges` is marked `available: false` with `review_workspace_mismatch` rather than falsely reporting the session root's working tree.
+- `ambiguous_worktrees` means multiple worktrees advanced from the baseline; inspect `committedDiagnostics` and the candidate paths, then use direct Git review.
 - Legacy sessions created before this feature lack a baseline and return `baseline_unavailable`.
 - Review both change sets before acceptance and use `kimi_continue_task` for fixes.
 

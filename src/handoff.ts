@@ -41,10 +41,12 @@ export interface BuildHandoffInput {
   serverToken?: string;
   baseCommit?: string;
   headCommit?: string;
+  reviewWorkspace?: string;
   commits: readonly CommitSummary[];
   initialDirtyPaths: readonly string[];
   committedChanges: HandoffChangeSet;
   workingTreeChanges: HandoffChangeSet;
+  committedDiagnostics?: unknown;
 }
 
 export interface KimiHandoff {
@@ -52,6 +54,7 @@ export interface KimiHandoff {
   finalMessage: string;
   baseCommit?: string;
   headCommit?: string;
+  reviewWorkspace?: string;
   commits: CommitSummary[];
   initialDirtyPaths: string[];
   committedChanges: HandoffChangeSet;
@@ -60,6 +63,7 @@ export interface KimiHandoff {
   additions: number;
   deletions: number;
   diffs: FileDiff[];
+  committedDiagnostics?: unknown;
 }
 
 export interface ExpandGitStatusEntriesInput {
@@ -91,6 +95,7 @@ export function buildHandoff(input: BuildHandoffInput): KimiHandoff {
     finalMessage,
     baseCommit: input.baseCommit,
     headCommit: input.headCommit,
+    reviewWorkspace: input.reviewWorkspace,
     commits: [...input.commits],
     initialDirtyPaths: [...input.initialDirtyPaths],
     committedChanges: committed,
@@ -99,6 +104,7 @@ export function buildHandoff(input: BuildHandoffInput): KimiHandoff {
     additions: committed.additions + working.additions,
     deletions: committed.deletions + working.deletions,
     diffs,
+    committedDiagnostics: input.committedDiagnostics,
   };
 }
 

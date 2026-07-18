@@ -340,10 +340,11 @@ The `handoff` now separates committed and working-tree evidence:
 
 - `baseCommit`: the Git baseline captured when the session was created.
 - `headCommit`: the current `HEAD` commit when the handoff was generated.
+- `reviewWorkspace`: the absolute path of the Git worktree whose `HEAD` advanced from `baseCommit` and was used to produce `committedChanges`. When Kimi committed in a nested worktree (for example, a Superpowers-style `.worktrees/...` checkout), this field tells Codex exactly where the commit evidence came from.
 - `commits`: commit summaries between `baseCommit` and `headCommit`.
 - `initialDirtyPaths`: paths that were already dirty at delegation time (diagnostic only; not subtracted from later working-tree changes).
-- `committedChanges`: changes already committed by Kimi (`available: false` with `unavailableReason` for legacy sessions or invalid ancestry).
-- `workingTreeChanges`: current working-tree/staging changes.
+- `committedChanges`: changes already committed by Kimi (`available: false` with `unavailableReason` for legacy sessions, invalid ancestry, or ambiguous worktrees).
+- `workingTreeChanges`: current working-tree/staging changes. If `reviewWorkspace` differs from the session `cwd`, this section is marked `available: false` with `unavailableReason: 'review_workspace_mismatch'` rather than presenting a clean working tree from the wrong checkout.
 - `changedFiles`, `additions`, `deletions`, and `diffs` remain as aggregate compatibility fields across both sources.
 
 Important review semantics:
@@ -351,6 +352,7 @@ Important review semantics:
 - A clean working tree does **not** prove Kimi made no changes; inspect `committedChanges`.
 - `workingTreeChanges` may include pre-existing user work listed in `initialDirtyPaths`.
 - `available: false` means the committed evidence is unavailable, not that there are zero committed changes. Use `unavailableReason` and direct `git log`/`git diff` when necessary.
+- `reviewWorkspace` selection uses the delegation-time worktree snapshot. Pre-existing worktrees that already differed from `baseCommit` are ignored, newly created or advanced worktrees are selected, and multiple equally plausible candidates return `ambiguous_worktrees` with candidate diagnostics.
 - Old sessions created before this feature lack a baseline and return `baseline_unavailable` for `committedChanges`.
 
 Use this tool to normalize the review step instead of manually reading `handoff` and `diffs`. When `kimi_delegate_and_wait` already returned `idle` with an embedded `reviewPackage`, you can review that package directly; call `kimi_review_package` afterward only if you need to re-fetch the latest handoff for the same session.

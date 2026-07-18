@@ -3,7 +3,7 @@ import { buildContinuationPrompt, buildDelegationPrompt } from './prompt.js';
 import type { KimiHandoff } from './handoff.js';
 import type { KimiClient } from './kimi/client.js';
 import { waitUntilIdle, type WaitUntilIdleResult } from './kimi/wait.js';
-import { buildHandoff, expandGitStatusEntries } from './handoff.js';
+import { buildHandoff, expandGitStatusEntries, type HandoffChangeSet } from './handoff.js';
 import { sanitizeDiagnosticText, selectLatestMeaningfulMessage } from './messages.js';
 import type { BridgeRuntimeStatus, ListSessionsInput, RecentSession, RecentSessionSummary, RuntimeSession, WireSession } from './kimi/types.js';
 import type { BridgeStatus, KimiPreflight } from './preflight.js';
@@ -214,14 +214,19 @@ function buildWebUrl(serverUrl: string, sessionId: string): string {
 }
 
 function baselineMetadata(baseline: GitBaseline): Record<string, unknown> {
-  return {
-    codex_kimi_bridge: {
-      schema_version: 1,
-      base_commit: baseline.baseCommit,
-      ...(baseline.baseBranch ? { base_branch: baseline.baseBranch } : {}),
-      initial_dirty_paths: baseline.initialDirtyPaths,
-    },
+  const codexKimiBridge: Record<string, unknown> = {
+    schema_version: 1,
+    base_commit: baseline.baseCommit,
+    ...(baseline.baseBranch ? { base_branch: baseline.baseBranch } : {}),
+    initial_dirty_paths: baseline.initialDirtyPaths,
   };
+  if (baseline.worktrees && baseline.worktrees.length > 0) {
+    codexKimiBridge.worktrees = baseline.worktrees.map((wt) => ({
+      path: wt.path,
+      head_commit: wt.headCommit,
+    }));
+  }
+  return { codex_kimi_bridge: codexKimiBridge };
 }
 
 function parseBaselineMetadata(metadata: Record<string, unknown> | undefined): GitBaseline | undefined {
@@ -237,11 +242,25 @@ function parseBaselineMetadata(metadata: Record<string, unknown> | undefined): G
   const initialDirtyPaths = Array.isArray(bridgeObj.initial_dirty_paths)
     ? bridgeObj.initial_dirty_paths.filter((p): p is string => typeof p === 'string')
     : [];
+  const worktreesRaw = bridgeObj.worktrees;
+  const worktrees = Array.isArray(worktreesRaw)
+    ? worktreesRaw
+        .map((item) => {
+          if (!item || typeof item !== 'object') return undefined;
+          const wt = item as Record<string, unknown>;
+          const wtPath = typeof wt.path === 'string' ? wt.path : undefined;
+          const headCommit = typeof wt.head_commit === 'string' ? wt.head_commit : undefined;
+          if (!wtPath || !headCommit) return undefined;
+          return { path: wtPath, headCommit };
+        })
+        .filter((wt): wt is NonNullable<typeof wt> => wt !== undefined)
+    : undefined;
   return {
     schemaVersion: 1,
     baseCommit,
     baseBranch,
     initialDirtyPaths,
+    worktrees,
   };
 }
 
@@ -809,18 +828,9 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
         workingTreeFiles.map((path) => deps.kimi.getFileDiff(input.sessionId, path)),
       );
 
-      const workingTreeChanges = {
-        available: true,
-        changedFiles: workingTreeFiles,
-        additions: gitStatus.additions,
-        deletions: gitStatus.deletions,
-        diffs: workingTreeDiffs.map((item) => ({ ...item, source: 'working_tree' as const })),
-        truncatedPaths: [],
-      };
-
       const baseline = parseBaselineMetadata(session.metadata);
       let committedResult:
-        | { baseCommit?: string; headCommit?: string; commits: Awaited<ReturnType<GitInspector['collectCommittedChanges']>>['commits']; changeSet: Awaited<ReturnType<GitInspector['collectCommittedChanges']>>['changeSet'] }
+        | { baseCommit?: string; headCommit?: string; reviewWorkspace?: string; commits: Awaited<ReturnType<GitInspector['collectCommittedChanges']>>['commits']; changeSet: Awaited<ReturnType<GitInspector['collectCommittedChanges']>>['changeSet']; diagnostics?: unknown }
         | undefined;
       try {
         committedResult = await gitInspector.collectCommittedChanges(session.metadata.cwd, baseline);
@@ -828,12 +838,35 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
         // Committed inspection failure must not discard working-tree evidence.
       }
 
+      const sessionCwd = session.metadata.cwd;
+      const reviewWorkspace = committedResult?.reviewWorkspace;
+      const workingTreeChanges: HandoffChangeSet =
+        reviewWorkspace && reviewWorkspace !== sessionCwd
+          ? {
+              available: false,
+              changedFiles: [],
+              additions: 0,
+              deletions: 0,
+              diffs: [],
+              truncatedPaths: [],
+              unavailableReason: 'review_workspace_mismatch',
+            }
+          : {
+              available: true,
+              changedFiles: workingTreeFiles,
+              additions: gitStatus.additions,
+              deletions: gitStatus.deletions,
+              diffs: workingTreeDiffs.map((item) => ({ ...item, source: 'working_tree' as const })),
+              truncatedPaths: [],
+            };
+
       return buildHandoff({
         messages,
         waitStatus: session.status,
         serverToken: deps.config.serverToken,
         baseCommit: committedResult?.baseCommit,
         headCommit: committedResult?.headCommit,
+        reviewWorkspace: committedResult?.reviewWorkspace,
         commits: committedResult?.commits ?? [],
         initialDirtyPaths: baseline?.initialDirtyPaths ?? [],
         committedChanges: committedResult?.changeSet ?? {
@@ -846,6 +879,7 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
           unavailableReason: baseline === undefined ? 'baseline_unavailable' : 'git_command_failed',
         },
         workingTreeChanges,
+        committedDiagnostics: committedResult?.diagnostics,
       });
     },
 

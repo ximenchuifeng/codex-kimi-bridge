@@ -1,8 +1,8 @@
 import { describe, expect, it, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile, mkdir, access } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, mkdir, access, realpath } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname, basename } from 'node:path';
 import { promisify } from 'node:util';
 import { NodeGitInspector, type GitBaseline, type BaselineCaptureResult } from '../src/git.js';
 
@@ -27,6 +27,12 @@ async function commitFile(repo: string, path: string, content: string, message: 
   await writeFile(fullPath, content, 'utf8');
   await git(repo, 'add', path);
   await git(repo, 'commit', '-m', message);
+}
+
+async function addWorktree(repo: string, name: string): Promise<string> {
+  const wtPath = join(dirname(repo), `${basename(repo)}-${name}`);
+  await git(repo, 'worktree', 'add', wtPath, '-b', name);
+  return wtPath;
 }
 
 describe('NodeGitInspector', () => {
@@ -320,5 +326,88 @@ describe('NodeGitInspector', () => {
     expect(range.changeSet.diffs).toHaveLength(1);
     expect(range.changeSet.diffs[0].path).toBe('src/small.ts');
     expect(range.changeSet.truncatedPaths).toContain('src/large.ts');
+  });
+
+  it('selects a newly created nested worktree that advanced from baseline', async () => {
+    const repo = await track(initRepo());
+    await commitFile(repo, 'src/a.ts', 'export const a = 1;\n', 'feat: initial');
+
+    const baselineResult = await new NodeGitInspector({ timeoutMs: 5_000, maxOutputBytes: 1_048_576 }).captureBaseline(repo);
+    const baseline = (baselineResult as BaselineCaptureResult & { available: true }).baseline;
+
+    const worktree = await track(addWorktree(repo, 'feature'));
+    await commitFile(worktree, 'feature.txt', 'feature work\n', 'feat: add feature');
+
+    const inspector = new NodeGitInspector({ timeoutMs: 5_000, maxOutputBytes: 1_048_576 });
+    const range = await inspector.collectCommittedChanges(repo, baseline);
+
+    expect(range.changeSet.available).toBe(true);
+    expect(range.reviewWorkspace).toBe(await realpath(worktree));
+    expect(range.commits).toHaveLength(1);
+    expect(range.commits[0].subject).toBe('feat: add feature');
+    expect(range.changeSet.changedFiles).toEqual(['feature.txt']);
+    expect(range.baseCommit).toBe(baseline.baseCommit);
+    expect(range.headCommit).not.toBe(baseline.baseCommit);
+  });
+
+  it('selects an existing worktree that was at baseline and then advanced', async () => {
+    const repo = await track(initRepo());
+    await commitFile(repo, 'src/a.ts', 'export const a = 1;\n', 'feat: initial');
+    const worktree = await track(addWorktree(repo, 'feature'));
+
+    const baselineResult = await new NodeGitInspector({ timeoutMs: 5_000, maxOutputBytes: 1_048_576 }).captureBaseline(repo);
+    const baseline = (baselineResult as BaselineCaptureResult & { available: true }).baseline;
+
+    await commitFile(worktree, 'feature.txt', 'feature work\n', 'feat: add feature');
+
+    const inspector = new NodeGitInspector({ timeoutMs: 5_000, maxOutputBytes: 1_048_576 });
+    const range = await inspector.collectCommittedChanges(repo, baseline);
+
+    expect(range.changeSet.available).toBe(true);
+    expect(range.reviewWorkspace).toBe(await realpath(worktree));
+    expect(range.changeSet.changedFiles).toEqual(['feature.txt']);
+  });
+
+  it('ignores a pre-existing unrelated worktree that already differed from baseline', async () => {
+    const repo = await track(initRepo());
+    await commitFile(repo, 'src/a.ts', 'export const a = 1;\n', 'feat: initial');
+    const worktree = await track(addWorktree(repo, 'other'));
+    await commitFile(worktree, 'other.txt', 'other work\n', 'feat: other work');
+
+    const baselineResult = await new NodeGitInspector({ timeoutMs: 5_000, maxOutputBytes: 1_048_576 }).captureBaseline(repo);
+    const baseline = (baselineResult as BaselineCaptureResult & { available: true }).baseline;
+
+    await commitFile(worktree, 'other2.txt', 'more other work\n', 'feat: more other work');
+
+    const inspector = new NodeGitInspector({ timeoutMs: 5_000, maxOutputBytes: 1_048_576 });
+    const range = await inspector.collectCommittedChanges(repo, baseline);
+
+    expect(range.changeSet.available).toBe(true);
+    expect(range.reviewWorkspace).toBeUndefined();
+    expect(range.commits).toEqual([]);
+    expect(range.changeSet.changedFiles).toEqual([]);
+  });
+
+  it('returns ambiguous_worktrees when multiple worktrees advanced from baseline', async () => {
+    const repo = await track(initRepo());
+    await commitFile(repo, 'src/a.ts', 'export const a = 1;\n', 'feat: initial');
+
+    const baselineResult = await new NodeGitInspector({ timeoutMs: 5_000, maxOutputBytes: 1_048_576 }).captureBaseline(repo);
+    const baseline = (baselineResult as BaselineCaptureResult & { available: true }).baseline;
+
+    const worktreeA = await track(addWorktree(repo, 'feature-a'));
+    const worktreeB = await track(addWorktree(repo, 'feature-b'));
+    await commitFile(worktreeA, 'a.txt', 'a\n', 'feat: a');
+    await commitFile(worktreeB, 'b.txt', 'b\n', 'feat: b');
+
+    const inspector = new NodeGitInspector({ timeoutMs: 5_000, maxOutputBytes: 1_048_576 });
+    const range = await inspector.collectCommittedChanges(repo, baseline);
+
+    expect(range.changeSet.available).toBe(false);
+    expect(range.changeSet.unavailableReason).toBe('ambiguous_worktrees');
+    expect(range.diagnostics?.candidates).toHaveLength(2);
+    expect(range.diagnostics?.candidates?.map((c) => c.path)).toEqual(
+      expect.arrayContaining([await realpath(worktreeA), await realpath(worktreeB)]),
+    );
   });
 });
