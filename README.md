@@ -2,13 +2,53 @@
 
 Local Codex plugin and MCP bridge for delegating implementation tasks to Kimi Code while Codex remains the planner and reviewer.
 
+## Prerequisites
+
+- Git
+- Node.js 20 or newer
+- Codex with plugin support
+- [Kimi Code](https://github.com/MoonshotAI/kimi-code), available as the `kimi` command
+
+The plugin includes a tracked MCP server bundle. First-time installation does not require pnpm, dependency installation, or a TypeScript build.
+
+## Install From Git
+
+```bash
+git clone https://github.com/ximenchuifeng/codex-kimi-bridge.git
+cd codex-kimi-bridge
+codex plugin marketplace add "$PWD"
+codex plugin add kimi-delegate@codex-kimi-bridge-local
+```
+
+Open a new Codex task after installation so Codex loads the plugin tools. Confirm installation with:
+
+```bash
+codex plugin list | rg 'kimi-delegate|codex-kimi-bridge-local'
+```
+
 ## Development
 
 ```bash
 pnpm install
 pnpm test
+pnpm typecheck
 pnpm build
+python3 /Users/ximenchuifeng/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py plugins/kimi-delegate
 ```
+
+`pnpm build` compiles `dist/` for development and regenerates the tracked `plugins/kimi-delegate/mcp/server.mjs`. Commit the bundle whenever source changes affect the MCP runtime.
+
+### Reinstall A Development Build
+
+```bash
+pnpm build
+python3 /Users/ximenchuifeng/.codex/skills/.system/plugin-creator/scripts/update_plugin_cachebuster.py plugins/kimi-delegate
+codex plugin add kimi-delegate@codex-kimi-bridge-local
+```
+
+Open a new Codex task after reinstalling. The helper adds a local `+codex.<timestamp>` cachebuster; release commits keep the plugin version as plain semantic version `0.2.0`. Do not hand-edit `.agents/plugins/marketplace.json` to refresh an installed plugin.
+
+Upgrading a cloned checkout only requires pulling the desired release and reinstalling the same plugin. You do not need to re-add an already configured marketplace.
 
 ## Recommended Seamless Usage
 
@@ -309,6 +349,15 @@ If none are available, the MCP tool returns a structured error. For predictable 
 ```bash
 export KIMI_MODEL=<your-kimi-model>
 ```
+
+## Troubleshooting
+
+### Plugin MCP Server Does Not Start
+
+- Confirm `node --version` reports Node.js 20 or newer.
+- Confirm `plugins/kimi-delegate/mcp/server.mjs` exists in the checkout.
+- For a source checkout modified locally, run `pnpm install && pnpm build`, then reinstall the plugin with the cachebuster flow.
+- After reinstalling, open a new Codex task so its MCP tool list refreshes.
 
 ## Collaboration Model
 

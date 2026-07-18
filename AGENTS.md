@@ -56,7 +56,7 @@ plugins/kimi-delegate/.mcp.json
 The plugin MCP server currently launches:
 
 ```text
-node /Users/ximenchuifeng/Coding/codex-kimi-bridge/dist/index.js
+node ./mcp/server.mjs
 ```
 
 After code changes that affect MCP tools or plugin config, run:
@@ -67,6 +67,11 @@ codex plugin add kimi-delegate@codex-kimi-bridge-local
 ```
 
 Then open a new Codex thread or restart Codex if the tool list does not refresh.
+
+- `plugins/kimi-delegate/mcp/server.mjs` is a tracked generated artifact.
+- Source changes affecting MCP runtime require `pnpm build` and committing the regenerated bundle.
+- Fresh clone installation does not require pnpm because the bundle is tracked.
+- Development reinstalls use `update_plugin_cachebuster.py`; release manifests use plain semantic versions.
 
 ## Kimi Server
 
@@ -156,7 +161,7 @@ codex plugin list | rg 'kimi-delegate|codex-kimi-bridge-local'
 Expected status:
 
 ```text
-kimi-delegate@codex-kimi-bridge-local  installed, enabled  0.1.0
+kimi-delegate@codex-kimi-bridge-local  installed, enabled  0.2.0
 ```
 
 ## Completed MVP Capabilities
@@ -184,7 +189,6 @@ Prefer using this bridge on a real external repo/task before adding more abstrac
 
 - Improve status output if real usage reveals confusing diagnostics.
 - Add more integration tests around real Kimi server API shape when safe.
-- Consider packaging the plugin more portably instead of using an absolute `dist/index.js` path.
 
 ## Important Boundaries
 
