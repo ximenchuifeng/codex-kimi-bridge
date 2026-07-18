@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { basename } from 'node:path';
+import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { loadBridgeConfig } from './config.js';
@@ -214,15 +214,21 @@ export async function main(): Promise<void> {
   await server.connect(new StdioServerTransport());
 }
 
-export function isDirectExecution(metaUrl: string): boolean {
+export function isDirectExecution(
+  metaUrl: string,
+  argvPath: string | undefined = process.argv[1],
+): boolean {
+  if (!argvPath || basename(argvPath) !== 'index.js') {
+    return false;
+  }
   try {
-    return basename(fileURLToPath(metaUrl)) === 'index.js';
+    return resolve(fileURLToPath(metaUrl)) === resolve(argvPath);
   } catch {
     return false;
   }
 }
 
-if (isDirectExecution(import.meta.url)) {
+if (isDirectExecution(import.meta.url, process.argv[1])) {
   main().catch((error) => {
     process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
     process.exit(1);

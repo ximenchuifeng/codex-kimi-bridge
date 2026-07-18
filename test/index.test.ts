@@ -3,20 +3,33 @@ import { KimiApiError, KimiNetworkError } from '../src/errors.js';
 import { isDirectExecution, runToolHandler } from '../src/index.js';
 
 describe('isDirectExecution', () => {
-  it('returns true for a file URL whose basename is index.js', () => {
-    expect(isDirectExecution('file:///some/path/dist/index.js')).toBe(true);
-    expect(isDirectExecution('file:///index.js')).toBe(true);
+  it('returns true when the module URL matches the argv entry path and basename is index.js', () => {
+    expect(isDirectExecution('file:///some/path/dist/index.js', '/some/path/dist/index.js')).toBe(true);
   });
 
-  it('returns false for non-index.js entry files', () => {
-    expect(isDirectExecution('file:///some/path/mcp/server.mjs')).toBe(false);
-    expect(isDirectExecution('file:///some/path/dist/index.mjs')).toBe(false);
-    expect(isDirectExecution('file:///some/path/server.cjs')).toBe(false);
+  it('returns false when the module URL differs from the argv importer path', () => {
+    // Importing dist/index.js from another entry (e.g. server.mjs) must not auto-start.
+    expect(isDirectExecution('file:///some/path/dist/index.js', '/some/path/mcp/server.mjs')).toBe(false);
+    expect(isDirectExecution('file:///some/path/dist/index.js', '/some/other/importer.mjs')).toBe(false);
   });
 
-  it('returns false for invalid URLs', () => {
-    expect(isDirectExecution('not-a-url')).toBe(false);
-    expect(isDirectExecution('')).toBe(false);
+  it('returns false when the argv entry basename is not index.js', () => {
+    expect(isDirectExecution('file:///some/path/mcp/server.mjs', '/some/path/mcp/server.mjs')).toBe(false);
+    expect(isDirectExecution('file:///some/path/dist/index.mjs', '/some/path/dist/index.mjs')).toBe(false);
+  });
+
+  it('returns false for missing, empty, or invalid argv path', () => {
+    expect(isDirectExecution('file:///some/path/dist/index.js', undefined)).toBe(false);
+    expect(isDirectExecution('file:///some/path/dist/index.js', '')).toBe(false);
+  });
+
+  it('returns false for malformed module URLs', () => {
+    expect(isDirectExecution('not-a-url', '/some/path/dist/index.js')).toBe(false);
+    expect(isDirectExecution('', '/some/path/dist/index.js')).toBe(false);
+  });
+
+  it('compares normalized absolute paths', () => {
+    expect(isDirectExecution('file:///some//path/./dist/index.js', '/some/path/dist/index.js')).toBe(true);
   });
 });
 

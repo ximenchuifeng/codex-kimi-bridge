@@ -108,8 +108,8 @@ describe('Codex plugin package', () => {
     // The previous equality guard would be true when server.mjs is launched
     // directly, causing src/index.ts and src/plugin-entry.ts to both call main().
     expect(bundleText).not.toContain('if (import.meta.url === `file://${process.argv[1]}`)');
-    // The new guard must inspect the module URL basename so server.mjs skips it.
-    expect(bundleText).toContain('isDirectExecution(import.meta.url)');
+    // The new guard must compare the module URL with the actual argv entry path.
+    expect(bundleText).toContain('isDirectExecution(import.meta.url, process.argv[1])');
   });
 
   it('does not package machine-specific paths or credential values', () => {

@@ -2983,7 +2983,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve.call(this, root, ref);
+      let _sch = resolve2.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3010,7 +3010,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve(root, ref) {
+    function resolve2(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3641,7 +3641,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve(baseURI, relativeURI, options) {
+    function resolve2(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const resolved = resolveComponent(parse3(baseURI, schemelessOptions), parse3(relativeURI, schemelessOptions), schemelessOptions, true);
       schemelessOptions.skipEscape = true;
@@ -3899,7 +3899,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve,
+      resolve: resolve2,
       resolveComponent,
       equal,
       serialize,
@@ -18979,7 +18979,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve) => setTimeout(resolve, pollInterval));
+        await new Promise((resolve2) => setTimeout(resolve2, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error2) {
@@ -18996,7 +18996,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve2, reject) => {
       const earlyReject = (error2) => {
         reject(error2);
       };
@@ -19074,7 +19074,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve(parseResult.data);
+            resolve2(parseResult.data);
           }
         } catch (error2) {
           reject(error2);
@@ -19335,12 +19335,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve2, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve, interval);
+      const timeoutId = setTimeout(resolve2, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -20440,7 +20440,7 @@ var McpServer = class {
     let task = createTaskResult.task;
     const pollInterval = task.pollInterval ?? 5e3;
     while (task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled") {
-      await new Promise((resolve) => setTimeout(resolve, pollInterval));
+      await new Promise((resolve2) => setTimeout(resolve2, pollInterval));
       const updatedTask = await extra.taskStore.getTask(taskId);
       if (!updatedTask) {
         throw new McpError(ErrorCode.InternalError, `Task ${taskId} not found during polling`);
@@ -21089,19 +21089,19 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve) => {
+    return new Promise((resolve2) => {
       const json = serializeMessage(message);
       if (this._stdout.write(json)) {
-        resolve();
+        resolve2();
       } else {
-        this._stdout.once("drain", resolve);
+        this._stdout.once("drain", resolve2);
       }
     });
   }
 };
 
 // src/index.ts
-import { basename } from "node:path";
+import { basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/config.ts
@@ -21474,7 +21474,7 @@ async function waitUntilIdle(input) {
     const remaining = deadline - Date.now();
     const sleepMs = Math.max(0, Math.min(intervalMs - elapsed, remaining));
     if (sleepMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, sleepMs));
+      await new Promise((resolve2) => setTimeout(resolve2, sleepMs));
     }
   } while (Date.now() < deadline);
   return { status: "timeout" };
@@ -22243,7 +22243,7 @@ var KimiPreflight = class {
     }
   }
   async startServer() {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve2, reject) => {
       let settled = false;
       const child = this.spawnImpl(this.config.kimiCommand, ["server", "run", "--keep-alive"], {
         detached: true,
@@ -22256,7 +22256,7 @@ var KimiPreflight = class {
           reject(error2);
         } else {
           child.unref();
-          resolve();
+          resolve2();
         }
       };
       child.on("error", (error2) => finish(new Error(`Failed to start Kimi server: ${error2.message}`)));
@@ -22276,7 +22276,7 @@ var KimiPreflight = class {
       if (lastStatus.healthzOk) {
         return lastStatus;
       }
-      await new Promise((resolve) => setTimeout(resolve, this.pollIntervalMs));
+      await new Promise((resolve2) => setTimeout(resolve2, this.pollIntervalMs));
     }
     const diagnostics = lastStatus?.diagnostics ?? ["Kimi server did not become ready in time."];
     throw new Error(
@@ -22500,14 +22500,17 @@ async function main() {
   );
   await server.connect(new StdioServerTransport());
 }
-function isDirectExecution(metaUrl) {
+function isDirectExecution(metaUrl, argvPath = process.argv[1]) {
+  if (!argvPath || basename(argvPath) !== "index.js") {
+    return false;
+  }
   try {
-    return basename(fileURLToPath(metaUrl)) === "index.js";
+    return resolve(fileURLToPath(metaUrl)) === resolve(argvPath);
   } catch {
     return false;
   }
 }
-if (isDirectExecution(import.meta.url)) {
+if (isDirectExecution(import.meta.url, process.argv[1])) {
   main().catch((error2) => {
     process.stderr.write(`${error2 instanceof Error ? error2.stack : String(error2)}
 `);
