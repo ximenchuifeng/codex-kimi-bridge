@@ -9,7 +9,8 @@ function makeKimi(overrides: Record<string, unknown> = {}): KimiClient {
     createSession: vi.fn(async () => ({ id: 's1' })) as unknown as KimiClient['createSession'],
     getSession: vi.fn(async () => ({ id: 's1', title: 'test', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 })) as unknown as KimiClient['getSession'],
     submitPrompt: vi.fn(async () => ({ prompt_id: 'p1', user_message_id: 'm1', status: 'running' })) as unknown as KimiClient['submitPrompt'],
-    getStatus: vi.fn(async () => ({ status: 'idle' })) as unknown as KimiClient['getStatus'],
+    getRuntimeStatus: vi.fn(async () => 'idle') as unknown as KimiClient['getRuntimeStatus'],
+    getMeta: vi.fn(async () => ({})) as unknown as KimiClient['getMeta'],
     listMessages: vi.fn(async () => []) as unknown as KimiClient['listMessages'],
     getGitStatus: vi.fn(async () => ({ entries: {}, additions: 0, deletions: 0 })) as unknown as KimiClient['getGitStatus'],
     getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '' })) as unknown as KimiClient['getFileDiff'],
@@ -109,19 +110,35 @@ describe('tool handlers', () => {
 
   it('waits until idle using the configured default timeout', async () => {
     const kimi = makeKimi({
-      getStatus: vi.fn()
-        .mockResolvedValueOnce({ status: 'running' })
-        .mockResolvedValueOnce({ status: 'idle' }),
+      getRuntimeStatus: vi.fn()
+        .mockResolvedValueOnce('running')
+        .mockResolvedValueOnce('idle'),
     });
     const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig({ requestTimeoutMs: 1100 }), preflight: makePreflight() });
 
     await expect(handlers.kimi_wait_until_idle({ sessionId: 's1' })).resolves.toEqual({ status: 'idle' });
-    expect(kimi.getStatus).toHaveBeenCalledWith('s1');
+    expect(kimi.getRuntimeStatus).toHaveBeenCalledWith('s1');
+  });
+
+  it('polls getRuntimeStatus instead of the legacy status response', async () => {
+    vi.useFakeTimers();
+    const getRuntimeStatus = vi.fn()
+      .mockResolvedValueOnce('running')
+      .mockResolvedValueOnce('idle');
+    const kimi = { ...makeKimi(), getRuntimeStatus };
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    const promise = handlers.kimi_wait_until_idle({ sessionId: 's1', timeoutMs: 1000 });
+    await vi.advanceTimersByTimeAsync(1000);
+
+    await expect(promise).resolves.toEqual({ status: 'idle' });
+    expect(getRuntimeStatus).toHaveBeenCalledWith('s1');
+    vi.useRealTimers();
   });
 
   it('returns timeout when the session does not become idle', async () => {
     const kimi = makeKimi({
-      getStatus: vi.fn(async () => ({ status: 'running' })),
+      getRuntimeStatus: vi.fn(async () => 'running'),
     });
     const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig({ requestTimeoutMs: 50 }), preflight: makePreflight() });
 
@@ -130,7 +147,7 @@ describe('tool handlers', () => {
 
   it('aggregates a handoff from messages, git status, and diffs', async () => {
     const kimi = makeKimi({
-      getStatus: vi.fn(async () => ({ status: 'idle' })),
+      getRuntimeStatus: vi.fn(async () => 'idle'),
       listMessages: vi.fn(async () => [
         { role: 'assistant', content: 'Working...' },
         { role: 'assistant', content: 'files changed\n- src/a.ts' },
@@ -149,9 +166,23 @@ describe('tool handlers', () => {
     expect(kimi.getFileDiff).toHaveBeenCalledWith('s1', 'src/a.ts');
   });
 
+  it('builds handoff status from the normalized Session resource', async () => {
+    const kimi = {
+      ...makeKimi(),
+      getSession: vi.fn(async () => ({
+        id: 's1', title: 'test', status: 'failed', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0,
+      })),
+      listMessages: vi.fn(async () => []),
+      getGitStatus: vi.fn(async () => ({ entries: {}, additions: 0, deletions: 0 })),
+    };
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    await expect(handlers.kimi_get_handoff({ sessionId: 's1' })).resolves.toMatchObject({ status: 'failed' });
+  });
+
   it('expands untracked directories to concrete file paths', async () => {
     const kimi = makeKimi({
-      getStatus: vi.fn(async () => ({ status: 'idle' })),
+      getRuntimeStatus: vi.fn(async () => 'idle'),
       listMessages: vi.fn(async () => []),
       getGitStatus: vi.fn(async () => ({
         entries: {
@@ -188,7 +219,7 @@ describe('tool handlers', () => {
 
   it('keeps the directory path when expansion yields no files', async () => {
     const kimi = makeKimi({
-      getStatus: vi.fn(async () => ({ status: 'idle' })),
+      getRuntimeStatus: vi.fn(async () => 'idle'),
       listMessages: vi.fn(async () => []),
       getGitStatus: vi.fn(async () => ({ entries: { 'tmp/': '??' }, additions: 0, deletions: 0 })),
       getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '' })),
@@ -216,7 +247,7 @@ describe('tool handlers', () => {
 
   it('returns a review package with handoff, changedFiles, diffStats, and checklist', async () => {
     const kimi = makeKimi({
-      getStatus: vi.fn(async () => ({ status: 'idle' })),
+      getRuntimeStatus: vi.fn(async () => 'idle'),
       listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done\n- src/a.ts' }]),
       getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M', 'src/b.ts': 'M' }, additions: 10, deletions: 2 })),
       getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: path === 'src/a.ts' ? '@@ diff' : '' })),
@@ -239,7 +270,7 @@ describe('tool handlers', () => {
 
   it('url-encodes the session id in the review package webUrl', async () => {
     const kimi = makeKimi({
-      getStatus: vi.fn(async () => ({ status: 'idle' })),
+      getRuntimeStatus: vi.fn(async () => 'idle'),
       listMessages: vi.fn(async () => []),
       getGitStatus: vi.fn(async () => ({ entries: {}, additions: 0, deletions: 0 })),
       getSession: vi.fn(async () => ({ id: 'review/session 1', title: 'test', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 })),
@@ -343,7 +374,7 @@ describe('tool handlers', () => {
 
   it('returns pending approvals when Kimi waits for approval', async () => {
     const kimi = makeKimi({
-      getStatus: vi.fn(async () => ({ status: 'awaiting_approval' })),
+      getRuntimeStatus: vi.fn(async () => 'awaiting_approval'),
       listPendingApprovals: vi.fn(async () => [{ approval_id: 'a1', tool_name: 'Bash' }]),
     });
     const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
@@ -356,7 +387,7 @@ describe('tool handlers', () => {
 
   it('returns pending questions when Kimi waits for a question', async () => {
     const kimi = makeKimi({
-      getStatus: vi.fn(async () => ({ status: 'awaiting_question' })),
+      getRuntimeStatus: vi.fn(async () => 'awaiting_question'),
       listPendingQuestions: vi.fn(async () => [{ question_id: 'q1', questions: [] }]),
     });
     const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
@@ -371,7 +402,7 @@ describe('tool handlers', () => {
     const kimi = makeKimi({
       createSession: vi.fn(async () => ({ id: 's1' })),
       submitPrompt: vi.fn(async () => ({ prompt_id: 'p1', user_message_id: 'm1', status: 'running' })),
-      getStatus: vi.fn(async () => ({ status: 'idle' })),
+      getRuntimeStatus: vi.fn(async () => 'idle'),
       listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done\n- src/a.ts' }]),
       getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 4, deletions: 1 })),
       getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ diff' })),
@@ -407,7 +438,7 @@ describe('tool handlers', () => {
 
   it('returns session details without handoff when delegate_and_wait times out', async () => {
     const kimi = makeKimi({
-      getStatus: vi.fn(async () => ({ status: 'running' })),
+      getRuntimeStatus: vi.fn(async () => 'running'),
       listMessages: vi.fn(async () => {
         throw new Error('handoff should not be loaded');
       }),
@@ -432,7 +463,7 @@ describe('tool handlers', () => {
 
   it('returns diagnostics for timeout status', async () => {
     const kimi = makeKimi({
-      getStatus: vi.fn(async () => ({ status: 'running' })),
+      getRuntimeStatus: vi.fn(async () => 'running'),
       listMessages: vi.fn(async () => [{ role: 'assistant', content: 'still working' }]),
     });
     const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig({ requestTimeoutMs: 20 }), preflight: makePreflight() });
@@ -455,7 +486,7 @@ describe('tool handlers', () => {
 
   it('returns diagnostics for aborted status', async () => {
     const kimi = makeKimi({
-      getStatus: vi.fn(async () => ({ status: 'aborted' })),
+      getRuntimeStatus: vi.fn(async () => 'aborted'),
       listMessages: vi.fn(async () => [{ role: 'assistant', content: 'aborted message' }]),
     });
     const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
@@ -475,6 +506,29 @@ describe('tool handlers', () => {
     expect(result.diagnostics?.suggestedNextActions).toEqual(expect.arrayContaining([expect.stringContaining('kimi_continue_task')]));
   });
 
+  it('returns diagnostics and no review package when the delegated session fails', async () => {
+    const kimi = {
+      ...makeKimi(),
+      getRuntimeStatus: vi.fn(async () => 'failed'),
+      listMessages: vi.fn(async () => [{ role: 'assistant', content: 'implementation failed' }]),
+    };
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    const result = await handlers.kimi_delegate_and_wait({
+      cwd: '/repo',
+      task: 'Kimi 0.27 compatibility',
+      acceptanceCriteria: [],
+      plan: [],
+      timeoutMs: 1000,
+    });
+
+    expect(result.wait).toEqual({ status: 'failed' });
+    expect(result.reviewPackage).toBeUndefined();
+    expect(result.handoff).toBeUndefined();
+    expect(result.diagnostics?.lastAssistantMessage).toBe('implementation failed');
+    expect(result.diagnostics?.suggestedNextActions.join(' ')).toContain('webUrl');
+  });
+
   it('diagnostics recentMessages contains at most 3 messages with truncated content', async () => {
     const longContent = 'x'.repeat(2000);
     const messages = [
@@ -485,7 +539,7 @@ describe('tool handlers', () => {
       { role: 'assistant', content: longContent },
     ];
     const kimi = makeKimi({
-      getStatus: vi.fn(async () => ({ status: 'timeout' })),
+      getRuntimeStatus: vi.fn(async () => 'timeout'),
       listMessages: vi.fn(async () => messages),
     });
     const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
@@ -505,7 +559,7 @@ describe('tool handlers', () => {
 
   it('diagnostics redacts token-like values in recentMessages', async () => {
     const kimi = makeKimi({
-      getStatus: vi.fn(async () => ({ status: 'timeout' })),
+      getRuntimeStatus: vi.fn(async () => 'timeout'),
       listMessages: vi.fn(async () => [
         { role: 'assistant', content: 'open http://127.0.0.1:58627/#token=url-secret and use config-secret' },
       ]),
@@ -531,7 +585,7 @@ describe('tool handlers', () => {
 
   it('diagnostics lastAssistantMessage picks the last assistant message', async () => {
     const kimi = makeKimi({
-      getStatus: vi.fn(async () => ({ status: 'timeout' })),
+      getRuntimeStatus: vi.fn(async () => 'timeout'),
       listMessages: vi.fn(async () => [
         { role: 'user', content: 'hello' },
         { role: 'assistant', content: 'first reply' },
@@ -553,7 +607,7 @@ describe('tool handlers', () => {
 
   it('diagnostics lastAssistantMessage is empty when no assistant message exists', async () => {
     const kimi = makeKimi({
-      getStatus: vi.fn(async () => ({ status: 'timeout' })),
+      getRuntimeStatus: vi.fn(async () => 'timeout'),
       listMessages: vi.fn(async () => [{ role: 'user', content: 'hello' }]),
     });
     const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
@@ -570,7 +624,7 @@ describe('tool handlers', () => {
 
   it('diagnostics includes messagesUnavailable when listMessages fails', async () => {
     const kimi = makeKimi({
-      getStatus: vi.fn(async () => ({ status: 'timeout' })),
+      getRuntimeStatus: vi.fn(async () => 'timeout'),
       listMessages: vi.fn(async () => {
         throw new Error('network error with secret-token and http://127.0.0.1:58627/?token=url-secret');
       }),
@@ -598,7 +652,7 @@ describe('tool handlers', () => {
     const getFileDiff = vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ diff' }));
     const getSession = vi.fn(async () => ({ id: 's1', title: 'test', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 }));
     const kimi = makeKimi({
-      getStatus: vi.fn(async () => ({ status: 'aborted' })),
+      getRuntimeStatus: vi.fn(async () => 'aborted'),
       listMessages: vi.fn(async () => [{ role: 'assistant', content: 'aborted' }]),
       getGitStatus,
       getFileDiff,
@@ -623,7 +677,7 @@ describe('tool handlers', () => {
 
   it('idle delegate_and_wait does not include diagnostics', async () => {
     const kimi = makeKimi({
-      getStatus: vi.fn(async () => ({ status: 'idle' })),
+      getRuntimeStatus: vi.fn(async () => 'idle'),
       listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done' }]),
       getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 })),
       getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ diff' })),
@@ -646,7 +700,7 @@ describe('tool handlers', () => {
 
   it('returns pending approvals when delegate_and_wait is blocked on approval', async () => {
     const kimi = makeKimi({
-      getStatus: vi.fn(async () => ({ status: 'awaiting_approval' })),
+      getRuntimeStatus: vi.fn(async () => 'awaiting_approval'),
       listPendingApprovals: vi.fn(async () => [{ approval_id: 'a1', tool_name: 'Bash' }]),
     });
     const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
@@ -668,7 +722,7 @@ describe('tool handlers', () => {
 
   it('returns pending questions when delegate_and_wait is blocked on a question', async () => {
     const kimi = makeKimi({
-      getStatus: vi.fn(async () => ({ status: 'awaiting_question' })),
+      getRuntimeStatus: vi.fn(async () => 'awaiting_question'),
       listPendingQuestions: vi.fn(async () => [{ question_id: 'q1', questions: [] }]),
     });
     const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
@@ -693,7 +747,7 @@ describe('tool handlers', () => {
     const kimi = makeKimi({
       createSession: vi.fn(async () => ({ id: 's1' })),
       submitPrompt: vi.fn(async () => ({ prompt_id: 'p1', user_message_id: 'm1', status: 'running' })),
-      getStatus: vi.fn(async () => ({ status: 'idle' })),
+      getRuntimeStatus: vi.fn(async () => 'idle'),
       listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done' }]),
       getGitStatus,
       getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ diff' })),
@@ -1084,7 +1138,7 @@ describe('tool handlers', () => {
       const kimi = makeKimi({
         createSession,
         submitPrompt,
-        getStatus: vi.fn(async () => ({ status: 'idle' })),
+        getRuntimeStatus: vi.fn(async () => 'idle'),
         listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done' }]),
         getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 })),
         getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ diff' })),
@@ -1137,7 +1191,7 @@ describe('tool handlers', () => {
         createSession,
         submitPrompt,
         listSessions,
-        getStatus: vi.fn(async () => ({ status: 'idle' })),
+        getRuntimeStatus: vi.fn(async () => 'idle'),
         listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done' }]),
         getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 })),
         getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ diff' })),
@@ -1167,13 +1221,13 @@ describe('tool handlers', () => {
       const listSessions = vi.fn(async () => ({
         items: [{ id: 's2', title: 'Feature X', status: 'running', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 }],
       }));
-      const getStatus = vi.fn(async () => ({ status: 'idle' }));
+      const getRuntimeStatus = vi.fn(async () => 'idle');
       const getGitStatus = vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 }));
       const kimi = makeKimi({
         createSession,
         submitPrompt,
         listSessions,
-        getStatus,
+        getRuntimeStatus,
         getGitStatus,
         getSession: vi.fn(async () => ({ id: 's2', title: 'Feature X', status: 'running', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 })),
       });
@@ -1189,7 +1243,7 @@ describe('tool handlers', () => {
 
       expect(createSession).not.toHaveBeenCalled();
       expect(submitPrompt).not.toHaveBeenCalled();
-      expect(getStatus).not.toHaveBeenCalled();
+      expect(getRuntimeStatus).not.toHaveBeenCalled();
       expect(getGitStatus).not.toHaveBeenCalled();
       expect(result.sessionId).toBe('s2');
       expect(result.webUrl).toBe('http://127.0.0.1:58627/sessions/s2');
@@ -1207,12 +1261,12 @@ describe('tool handlers', () => {
       const listSessions = vi.fn(async () => ({
         items: [{ id: 's2', title: 'Feature X', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 }],
       }));
-      const getStatus = vi.fn(async () => ({ status: 'idle' }));
+      const getRuntimeStatus = vi.fn(async () => 'idle');
       const kimi = makeKimi({
         createSession,
         submitPrompt,
         listSessions,
-        getStatus,
+        getRuntimeStatus,
         listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done' }]),
         getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 4, deletions: 1 })),
         getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ diff' })),
@@ -1251,7 +1305,7 @@ describe('tool handlers', () => {
         createSession,
         submitPrompt,
         listSessions,
-        getStatus: vi.fn(async () => ({ status: 'awaiting_approval' })),
+        getRuntimeStatus: vi.fn(async () => 'awaiting_approval'),
         listPendingApprovals,
         getSession: vi.fn(async () => ({ id: 's2', title: 'Feature X', status: 'awaiting_approval', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 })),
       });
@@ -1286,7 +1340,7 @@ describe('tool handlers', () => {
         createSession,
         submitPrompt,
         listSessions,
-        getStatus: vi.fn(async () => ({ status: 'awaiting_question' })),
+        getRuntimeStatus: vi.fn(async () => 'awaiting_question'),
         listPendingQuestions,
         getSession: vi.fn(async () => ({ id: 's2', title: 'Feature X', status: 'awaiting_question', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 })),
       });
@@ -1320,7 +1374,7 @@ describe('tool handlers', () => {
         createSession,
         submitPrompt,
         listSessions,
-        getStatus: vi.fn(async () => ({ status: 'idle' })),
+        getRuntimeStatus: vi.fn(async () => 'idle'),
         listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done' }]),
         getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 })),
         getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ diff' })),
@@ -1345,6 +1399,26 @@ describe('tool handlers', () => {
       expect(result.reviewPackage).toBeDefined();
     });
 
+    it('does not automatically reuse a failed dedupe match', async () => {
+      const kimi = {
+        ...makeKimi(),
+        listSessions: vi.fn(async () => ({
+          items: [{ id: 's2', title: 'Kimi 0.27 compatibility', status: 'failed', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 }],
+        })),
+      };
+      const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+      const result = await handlers.kimi_delegate_and_wait({
+        cwd: '/repo',
+        task: 'Kimi 0.27 compatibility retry',
+        acceptanceCriteria: [],
+        plan: [],
+        dedupe: { titleContains: 'Kimi 0.27 compatibility', reuseIfStatus: ['failed'] },
+      });
+
+      expect(result.dedupe).toMatchObject({ matched: true, reused: false, reason: 'status_not_supported' });
+    });
+
     it('respects custom reuseIfStatus in dedupe', async () => {
       const createSession = vi.fn(async () => ({ id: 's1' }));
       const submitPrompt = vi.fn(async () => ({ prompt_id: 'p1', user_message_id: 'm1', status: 'running' }));
@@ -1355,7 +1429,7 @@ describe('tool handlers', () => {
         createSession,
         submitPrompt,
         listSessions,
-        getStatus: vi.fn(async () => ({ status: 'idle' })),
+        getRuntimeStatus: vi.fn(async () => 'idle'),
         listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done' }]),
         getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 })),
         getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ diff' })),
@@ -1388,7 +1462,7 @@ describe('tool handlers', () => {
         createSession,
         submitPrompt,
         listSessions,
-        getStatus: vi.fn(async () => ({ status: 'idle' })),
+        getRuntimeStatus: vi.fn(async () => 'idle'),
         listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done' }]),
         getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 })),
         getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ diff' })),
@@ -1423,7 +1497,7 @@ describe('tool handlers', () => {
         createSession,
         submitPrompt,
         listSessions,
-        getStatus: vi.fn(async () => ({ status: 'idle' })),
+        getRuntimeStatus: vi.fn(async () => 'idle'),
       });
       const handlers = createToolHandlers({
         kimi: kimi as never,
@@ -1457,7 +1531,7 @@ describe('tool handlers', () => {
         createSession,
         submitPrompt,
         listSessions,
-        getStatus: vi.fn(async () => ({ status: 'idle' })),
+        getRuntimeStatus: vi.fn(async () => 'idle'),
         listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done' }]),
         getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 })),
         getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ diff' })),
@@ -1491,7 +1565,7 @@ describe('tool handlers', () => {
         createSession,
         submitPrompt,
         listSessions,
-        getStatus: vi.fn(async () => ({ status: 'idle' })),
+        getRuntimeStatus: vi.fn(async () => 'idle'),
         listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done' }]),
         getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 })),
         getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ diff' })),
@@ -1528,7 +1602,7 @@ describe('tool handlers', () => {
         createSession,
         submitPrompt,
         listSessions,
-        getStatus: vi.fn(async () => ({ status: 'idle' })),
+        getRuntimeStatus: vi.fn(async () => 'idle'),
         listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done' }]),
         getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 })),
         getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ diff' })),
@@ -1559,7 +1633,7 @@ describe('tool handlers', () => {
         createSession,
         submitPrompt,
         listSessions,
-        getStatus: vi.fn(async () => ({ status: 'idle' })),
+        getRuntimeStatus: vi.fn(async () => 'idle'),
         listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done' }]),
         getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 })),
         getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ diff' })),
@@ -1592,7 +1666,7 @@ describe('tool handlers', () => {
         createSession,
         submitPrompt,
         listSessions,
-        getStatus: vi.fn(async () => ({ status: 'idle' })),
+        getRuntimeStatus: vi.fn(async () => 'idle'),
         listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done' }]),
         getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 })),
         getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ diff' })),
@@ -1623,7 +1697,7 @@ describe('tool handlers', () => {
         createSession,
         submitPrompt,
         listSessions,
-        getStatus: vi.fn(async () => ({ status: 'idle' })),
+        getRuntimeStatus: vi.fn(async () => 'idle'),
         listMessages: vi.fn(async () => [{ role: 'assistant', content: 'done' }]),
         getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 })),
         getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ diff' })),
@@ -1991,7 +2065,7 @@ describe('tool handlers', () => {
       const kimi = makeKimi({
         listSessions,
         listMessages,
-        getStatus: vi.fn(async () => ({ status: 'idle' })),
+        getRuntimeStatus: vi.fn(async () => 'idle'),
         getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 })),
         getFileDiff: vi.fn(async () => ({ path: 'src/a.ts', diff: '@@ diff' })),
         getSession: vi.fn(async () => ({ id: 's2', title: 'Feature X', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 })),
@@ -2029,7 +2103,7 @@ describe('tool handlers', () => {
         submitPrompt,
         listSessions,
         listMessages,
-        getStatus: vi.fn(async () => ({ status: 'idle' })),
+        getRuntimeStatus: vi.fn(async () => 'idle'),
         getGitStatus: vi.fn(async () => ({ entries: { 'src/a.ts': 'M' }, additions: 1, deletions: 0 })),
         getFileDiff: vi.fn(async () => ({ path: 'src/a.ts', diff: '@@ diff' })),
         getSession: vi.fn(async () => ({ id: 's1', title: 'test', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 })),

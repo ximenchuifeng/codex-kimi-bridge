@@ -4,7 +4,7 @@ import type { KimiHandoff } from './handoff.js';
 import type { KimiClient } from './kimi/client.js';
 import { waitUntilIdle, type WaitUntilIdleResult } from './kimi/wait.js';
 import { buildHandoff, expandGitStatusEntries } from './handoff.js';
-import type { BridgeRuntimeStatus, ListSessionsInput, RecentSession, RecentSessionSummary, WireSession } from './kimi/types.js';
+import type { BridgeRuntimeStatus, ListSessionsInput, RecentSession, RecentSessionSummary, RuntimeSession, WireSession } from './kimi/types.js';
 import type { BridgeStatus, KimiPreflight } from './preflight.js';
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
@@ -209,10 +209,10 @@ function sanitizeSessionTitle(title: string): string {
     .replace(/([?&]token=)[^&\s]+/gi, '$1[redacted]');
 }
 
-function buildRecentSession(serverUrl: string, session: WireSession & { created_at?: string; updated_at?: string }, serverToken: string | undefined): RecentSession {
+function buildRecentSession(serverUrl: string, session: RuntimeSession & { created_at?: string; updated_at?: string }, serverToken: string | undefined): RecentSession {
   return {
     sessionId: session.id,
-    status: session.status as BridgeRuntimeStatus,
+    status: session.status,
     title: sanitizeDiagnosticText(session.title, serverToken),
     webUrl: buildWebUrl(serverUrl, session.id),
     cwd: sanitizeDiagnosticText(session.metadata.cwd, serverToken),
@@ -238,6 +238,12 @@ function buildFindSuggestions(match: RecentSession): string[] {
         `找到已中断的 session ${match.sessionId}。`,
         `在浏览器中打开 ${match.webUrl} 查看中断原因。`,
         '必要时使用 kimi_continue_task 继续旧 session，而不是直接重新 delegate。',
+      ];
+    case 'failed':
+      return [
+        `找到执行失败的 session ${match.sessionId}。`,
+        `在浏览器中打开 ${match.webUrl} 查看失败原因。`,
+        '修正原因后使用 kimi_continue_task 继续旧 session，不要自动创建重复 session。',
       ];
     case 'awaiting_approval':
       return [
@@ -413,7 +419,7 @@ async function findRecentSessionByTitle(
 async function buildDelegateAndWaitDiagnostics(
   kimi: KimiClient,
   sessionId: string,
-  status: 'timeout' | 'aborted',
+  status: 'timeout' | 'aborted' | 'failed',
   webUrl: string,
   serverToken: string | undefined,
 ): Promise<DelegateAndWaitDiagnostics> {
@@ -440,11 +446,16 @@ async function buildDelegateAndWaitDiagnostics(
     messageError = sanitizeDiagnosticText(rawError, serverToken);
   }
 
-  const suggestedNextActions =
-    status === 'timeout'
+  const suggestedNextActions = status === 'timeout'
+    ? [
+        'wait 状态为 timeout，可继续调用 kimi_wait_until_idle 等待同一 session。',
+        `或在浏览器中打开 webUrl ${webUrl} 查看实时进度。`,
+      ]
+    : status === 'failed'
       ? [
-          'wait 状态为 timeout，可继续调用 kimi_wait_until_idle 等待同一 session。',
-          `或在浏览器中打开 webUrl ${webUrl} 查看实时进度。`,
+          'wait 状态为 failed，请在浏览器中打开 webUrl 查看失败原因。',
+          `webUrl: ${webUrl}`,
+          '修正原因后使用 kimi_continue_task 继续同一 session。',
         ]
       : [
           'wait 状态为 aborted，可在浏览器中打开 webUrl 查看中断原因。',
@@ -513,7 +524,7 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
         webUrl: delegated.webUrl,
         wait,
       };
-      if (wait.status === 'timeout' || wait.status === 'aborted') {
+      if (wait.status === 'timeout' || wait.status === 'aborted' || wait.status === 'failed') {
         result.diagnostics = await buildDelegateAndWaitDiagnostics(
           deps.kimi,
           delegated.sessionId,
@@ -702,7 +713,7 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
       const result = await waitUntilIdle({
         sessionId: input.sessionId,
         timeoutMs: input.timeoutMs ?? deps.config.requestTimeoutMs,
-        pollStatus: () => deps.kimi.getStatus(input.sessionId).then((s) => ({ status: s.status as BridgeRuntimeStatus })),
+        pollStatus: async () => ({ status: await deps.kimi.getRuntimeStatus(input.sessionId) }),
       });
       if (result.status === 'awaiting_approval') {
         return {
@@ -720,8 +731,7 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
     },
 
     async kimi_get_handoff(input: GetHandoffInput) {
-      const [status, messages, gitStatus, session] = await Promise.all([
-        deps.kimi.getStatus(input.sessionId),
+      const [messages, gitStatus, session] = await Promise.all([
         deps.kimi.listMessages(input.sessionId),
         deps.kimi.getGitStatus(input.sessionId),
         deps.kimi.getSession(input.sessionId),
@@ -736,7 +746,7 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
 
       const diffs = await Promise.all(changedFiles.map((path) => deps.kimi.getFileDiff(input.sessionId, path)));
 
-      return buildHandoff({ messages, gitStatus, diffs, waitStatus: status.status as BridgeRuntimeStatus, changedFiles });
+      return buildHandoff({ messages, gitStatus, diffs, waitStatus: session.status, changedFiles });
     },
 
     async kimi_review_package(input: ReviewPackageInput) {
