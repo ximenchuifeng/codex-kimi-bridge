@@ -36,27 +36,6 @@ type UnavailableReason =
   | 'base_not_ancestor'
   | 'git_command_failed';
 
-type ExecError = { code?: number | string; stderr?: string | Buffer; message?: string };
-
-function isExecError(error: unknown): error is ExecError {
-  return typeof error === 'object' && error !== null && ('code' in error || 'stderr' in error || 'message' in error);
-}
-
-function sanitizeError(error: unknown): string {
-  if (!isExecError(error)) {
-    return error instanceof Error ? error.message : String(error);
-  }
-  const stderr = typeof error.stderr === 'string' ? error.stderr : error.stderr?.toString('utf8') ?? '';
-  const message = error.message ?? '';
-  const combined = `${message} ${stderr}`.trim();
-  // Strip common Git path prefixes and newlines to keep diagnostics concise and token-free.
-  return combined
-    .replace(/fatal:\s*/g, '')
-    .replace(/error:\s*/g, '')
-    .replace(/[\r\n]+/g, ' ')
-    .slice(0, 200);
-}
-
 function isBufferOutput(output: unknown): output is Buffer {
   return Buffer.isBuffer(output);
 }
@@ -118,13 +97,13 @@ export class NodeGitInspector implements GitInspector {
     cwd: string,
     args: string[],
     maxBuffer?: number,
-  ): Promise<{ ok: true; stdout: Buffer } | { ok: false; code?: number | string; error: string }> {
+  ): Promise<{ ok: true; stdout: Buffer } | { ok: false; code?: number | string }> {
     try {
       const stdout = await this.git(cwd, args, maxBuffer);
       return { ok: true, stdout };
     } catch (err) {
-      const execErr = isExecError(err) ? err : {};
-      return { ok: false, code: execErr.code, error: sanitizeError(err) };
+      const execErr = err as { code?: number | string } | undefined;
+      return { ok: false, code: execErr?.code };
     }
   }
 
@@ -299,22 +278,46 @@ export class NodeGitInspector implements GitInspector {
     base: string,
     head: string,
   ): Promise<{ changedFiles: string[]; additions: number; deletions: number }> {
-    const stdout = await this.git(cwd, ['diff', `${base}..${head}`, '--numstat'], this.metadataMaxBuffer);
-    const lines = stdout.toString('utf8').trim().split('\n').filter(Boolean);
+    const stdout = await this.git(cwd, ['diff', `${base}..${head}`, '--numstat', '-z'], this.metadataMaxBuffer);
+    const parts = stdout.toString('utf8').split('\0');
     let additions = 0;
     let deletions = 0;
     const changedFiles: string[] = [];
-    for (const line of lines) {
-      const numMatch = line.match(/^(\d+)\s+(\d+)\s+(.+)$/);
-      const binaryMatch = line.match(/^-\t-\t(.+)$/);
-      if (!numMatch && !binaryMatch) continue;
-      const pathPart = numMatch ? numMatch[3] : binaryMatch![1];
-      if (numMatch) {
-        additions += parseInt(numMatch[1], 10);
-        deletions += parseInt(numMatch[2], 10);
+    let i = 0;
+    while (i < parts.length - 1) {
+      const segment = parts[i];
+      const fields = segment.split('\t');
+      if (fields.length !== 3) {
+        i += 1;
+        continue;
       }
-      const arrowIndex = pathPart.indexOf(' => ');
-      changedFiles.push(arrowIndex >= 0 ? pathPart.slice(arrowIndex + 4) : pathPart);
+      const [addField, delField, path] = fields;
+      if (path) {
+        // Normal or binary single-path record.
+        if (addField === '-' && delField === '-') {
+          // Binary file: no line counts.
+        } else {
+          additions += parseInt(addField, 10);
+          deletions += parseInt(delField, 10);
+        }
+        changedFiles.push(path);
+        i += 1;
+        continue;
+      }
+      // Rename/copy: the path field is empty, followed by the original path
+      // and then the new path.
+      const oldPath = parts[i + 1];
+      const newPath = parts[i + 2];
+      if (newPath) {
+        if (addField === '-' && delField === '-') {
+          // Binary rename/copy.
+        } else {
+          additions += parseInt(addField, 10);
+          deletions += parseInt(delField, 10);
+        }
+        changedFiles.push(newPath);
+      }
+      i += 3;
     }
     return { changedFiles: changedFiles.sort(), additions, deletions };
   }
@@ -332,13 +335,10 @@ export class NodeGitInspector implements GitInspector {
       try {
         const patch = await this.git(cwd, ['diff', `${base}..${head}`, '--', path]);
         diffs.push({ path, diff: patch.toString('utf8'), source: 'committed' });
-      } catch (err) {
-        const execErr = isExecError(err) ? err : {};
-        if (execErr.code === 'ENOBUFS' || execErr.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
-          truncatedPaths.push(path);
-        } else {
-          throw err;
-        }
+      } catch {
+        // Treat any per-file diff failure as truncated so that commit/file/stat
+        // evidence is preserved even when a single patch cannot be retrieved.
+        truncatedPaths.push(path);
       }
     }
     return { diffs, truncatedPaths };
