@@ -8,14 +8,24 @@ export interface Envelope<T> {
 
 export type PermissionMode = 'manual' | 'auto' | 'yolo';
 
+import type { BridgeRuntimeStatus } from './runtime-status.js';
+export type { BridgeRuntimeStatus };
+
 export interface WireSession {
   id: string;
   title: string;
-  status: 'idle' | 'running' | 'awaiting_approval' | 'awaiting_question' | 'aborted';
+  status?: unknown;
+  busy?: unknown;
+  pending_interaction?: unknown;
+  last_turn_reason?: unknown;
   metadata: { cwd: string; [key: string]: unknown };
   agent_config: Record<string, unknown>;
   last_seq: number;
 }
+
+export type RuntimeSession = Omit<WireSession, 'status'> & {
+  status: BridgeRuntimeStatus;
+};
 
 export interface PromptSubmitResult {
   prompt_id: string;
@@ -24,7 +34,8 @@ export interface PromptSubmitResult {
 }
 
 export interface SessionStatus {
-  status: WireSession['status'];
+  status?: unknown;
+  busy?: unknown;
   model?: string;
   thinking_level: string;
   permission: string;
@@ -33,6 +44,11 @@ export interface SessionStatus {
   context_tokens: number;
   max_context_tokens: number;
   context_usage: number;
+}
+
+export interface KimiServerMeta {
+  server_version?: string;
+  backend?: string;
 }
 
 export interface KimiServerConfig {
@@ -66,7 +82,7 @@ export interface RecentSessionSummary {
 
 export interface RecentSession {
   sessionId: string;
-  status: WireSession['status'];
+  status: BridgeRuntimeStatus;
   title: string;
   webUrl: string;
   cwd?: string;
@@ -76,5 +92,5 @@ export interface RecentSession {
 }
 
 export interface ListSessionsResult {
-  items: Array<WireSession & { created_at?: string; updated_at?: string }>;
+  items: Array<RuntimeSession & { created_at?: string; updated_at?: string }>;
 }

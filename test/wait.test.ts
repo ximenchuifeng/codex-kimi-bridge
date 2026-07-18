@@ -43,6 +43,15 @@ describe('waitUntilIdle', () => {
     expect(pollStatus).toHaveBeenCalledTimes(1);
   });
 
+  it('returns failed as a terminal status', async () => {
+    const pollStatus = vi.fn(async () => ({ status: 'failed' as const }));
+    const promise = waitUntilIdle({ sessionId: 's1', timeoutMs: 5000, pollStatus });
+    await vi.advanceTimersByTimeAsync(0);
+
+    await expect(promise).resolves.toEqual({ status: 'failed' });
+    expect(pollStatus).toHaveBeenCalledTimes(1);
+  });
+
   it('returns timeout when the session keeps running', async () => {
     const pollStatus = vi.fn(async () => ({ status: 'running' as const }));
     const promise = waitUntilIdle({ sessionId: 's1', timeoutMs: 100, pollIntervalMs: 30, pollStatus });

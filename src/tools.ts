@@ -4,7 +4,7 @@ import type { KimiHandoff } from './handoff.js';
 import type { KimiClient } from './kimi/client.js';
 import { waitUntilIdle, type WaitUntilIdleResult } from './kimi/wait.js';
 import { buildHandoff, expandGitStatusEntries } from './handoff.js';
-import type { ListSessionsInput, RecentSession, RecentSessionSummary, WireSession } from './kimi/types.js';
+import type { BridgeRuntimeStatus, ListSessionsInput, RecentSession, RecentSessionSummary, WireSession } from './kimi/types.js';
 import type { BridgeStatus, KimiPreflight } from './preflight.js';
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
@@ -212,7 +212,7 @@ function sanitizeSessionTitle(title: string): string {
 function buildRecentSession(serverUrl: string, session: WireSession & { created_at?: string; updated_at?: string }, serverToken: string | undefined): RecentSession {
   return {
     sessionId: session.id,
-    status: session.status,
+    status: session.status as BridgeRuntimeStatus,
     title: sanitizeDiagnosticText(session.title, serverToken),
     webUrl: buildWebUrl(serverUrl, session.id),
     cwd: sanitizeDiagnosticText(session.metadata.cwd, serverToken),
@@ -702,7 +702,7 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
       const result = await waitUntilIdle({
         sessionId: input.sessionId,
         timeoutMs: input.timeoutMs ?? deps.config.requestTimeoutMs,
-        pollStatus: () => deps.kimi.getStatus(input.sessionId),
+        pollStatus: () => deps.kimi.getStatus(input.sessionId).then((s) => ({ status: s.status as BridgeRuntimeStatus })),
       });
       if (result.status === 'awaiting_approval') {
         return {
@@ -736,7 +736,7 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
 
       const diffs = await Promise.all(changedFiles.map((path) => deps.kimi.getFileDiff(input.sessionId, path)));
 
-      return buildHandoff({ messages, gitStatus, diffs, waitStatus: status.status, changedFiles });
+      return buildHandoff({ messages, gitStatus, diffs, waitStatus: status.status as BridgeRuntimeStatus, changedFiles });
     },
 
     async kimi_review_package(input: ReviewPackageInput) {
