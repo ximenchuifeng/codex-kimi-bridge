@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, afterEach } from 'vitest';
 import { mkdtemp, rm, writeFile, mkdir, readFile, access } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -103,6 +103,47 @@ describe('NodeGitInspector', () => {
     expect(range.changeSet.diffs[0]).toMatchObject({ path: 'src/a b.ts', source: 'committed' });
   });
 
+  it('includes binary files in committed changes with zero additions and deletions', async () => {
+    const repo = await track(initRepo());
+    await commitFile(repo, 'src/a.ts', 'export const a = 1;\n', 'feat: initial');
+
+    const inspector = new NodeGitInspector({ timeoutMs: 5_000, maxOutputBytes: 1_048_576 });
+    const baselineResult = await inspector.captureBaseline(repo);
+    expect(baselineResult.available).toBe(true);
+    const baseline = (baselineResult as BaselineCaptureResult & { available: true }).baseline;
+
+    const binaryPath = 'assets/icon.png';
+    const fullPath = join(repo, binaryPath);
+    await mkdir(join(fullPath, '..'), { recursive: true });
+    await writeFile(fullPath, Buffer.from([0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07]), 'binary');
+    await git(repo, 'add', binaryPath);
+    await git(repo, 'commit', '-m', 'feat: add binary icon');
+
+    const range = await inspector.collectCommittedChanges(repo, baseline);
+
+    expect(range.changeSet.available).toBe(true);
+    expect(range.changeSet.changedFiles).toEqual([binaryPath]);
+    expect(range.changeSet.additions).toBe(0);
+    expect(range.changeSet.deletions).toBe(0);
+    expect(range.changeSet.diffs).toHaveLength(1);
+    expect(range.changeSet.diffs[0].path).toBe(binaryPath);
+  });
+
+  it('uses the new path for staged renames in initialDirtyPaths', async () => {
+    const repo = await track(initRepo());
+    await commitFile(repo, 'src/old.ts', 'export const old = 1;\n', 'feat: initial');
+
+    await git(repo, 'mv', 'src/old.ts', 'src/new.ts');
+
+    const inspector = new NodeGitInspector({ timeoutMs: 5_000, maxOutputBytes: 1_048_576 });
+    const result = await inspector.captureBaseline(repo);
+
+    expect(result.available).toBe(true);
+    if (result.available) {
+      expect(result.baseline.initialDirtyPaths).toEqual(['src/new.ts']);
+    }
+  });
+
   it('returns an empty but available range when HEAD equals baseline', async () => {
     const repo = await track(initRepo());
     await commitFile(repo, 'src/a.ts', 'export const a = 1;\n', 'feat: initial');
@@ -146,6 +187,21 @@ describe('NodeGitInspector', () => {
     if (!baseline.available) {
       expect(baseline.unavailableReason).toBe('head_unavailable');
     }
+  });
+
+  it('collectCommittedChanges degrades to head_unavailable when the repository has no commits', async () => {
+    const repo = await track(initRepo());
+    const inspector = new NodeGitInspector({ timeoutMs: 5_000, maxOutputBytes: 1_048_576 });
+
+    const baseline: GitBaseline = {
+      schemaVersion: 1,
+      baseCommit: '0'.repeat(40),
+      initialDirtyPaths: [],
+    };
+
+    const range = await inspector.collectCommittedChanges(repo, baseline);
+    expect(range.changeSet.available).toBe(false);
+    expect(range.changeSet.unavailableReason).toBe('head_unavailable');
   });
 
   it('degrades when baseline is missing', async () => {

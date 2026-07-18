@@ -29,6 +29,13 @@ export interface GitInspector {
   collectCommittedChanges(cwd: string, baseline?: GitBaseline): Promise<CommittedChangeResult>;
 }
 
+type UnavailableReason =
+  | 'baseline_unavailable'
+  | 'not_a_git_repository'
+  | 'head_unavailable'
+  | 'base_not_ancestor'
+  | 'git_command_failed';
+
 type ExecError = { code?: number | string; stderr?: string | Buffer; message?: string };
 
 function isExecError(error: unknown): error is ExecError {
@@ -67,13 +74,12 @@ function parseNulStatus(buffer: Buffer): Array<{ path: string; status: string }>
     }
     const status = entry.slice(0, 2);
     const path = entry.slice(3);
-    if (status[1] === 'R' || status[1] === 'C') {
-      const newPath = parts[i + 1];
-      if (newPath) {
-        entries.push({ status, path: newPath });
-        i += 2;
-        continue;
-      }
+    if (status[0] === 'R' || status[0] === 'C' || status[1] === 'R' || status[1] === 'C') {
+      // `git status --porcelain=v1 -z` lists the new path first, then the
+      // original path. Keep the new path and skip the original.
+      entries.push({ status, path });
+      i += 2;
+      continue;
     }
     entries.push({ status, path });
     i += 1;
@@ -259,7 +265,7 @@ export class NodeGitInspector implements GitInspector {
     }
   }
 
-  private unavailableChangeSet(reason: string): HandoffChangeSet {
+  private unavailableChangeSet(reason: UnavailableReason): HandoffChangeSet {
     return {
       available: false,
       changedFiles: [],
@@ -299,11 +305,14 @@ export class NodeGitInspector implements GitInspector {
     let deletions = 0;
     const changedFiles: string[] = [];
     for (const line of lines) {
-      const match = line.match(/^(\d+)\s+(\d+)\s+(.+)$/);
-      if (!match) continue;
-      additions += parseInt(match[1], 10);
-      deletions += parseInt(match[2], 10);
-      const pathPart = match[3];
+      const numMatch = line.match(/^(\d+)\s+(\d+)\s+(.+)$/);
+      const binaryMatch = line.match(/^-\t-\t(.+)$/);
+      if (!numMatch && !binaryMatch) continue;
+      const pathPart = numMatch ? numMatch[3] : binaryMatch![1];
+      if (numMatch) {
+        additions += parseInt(numMatch[1], 10);
+        deletions += parseInt(numMatch[2], 10);
+      }
       const arrowIndex = pathPart.indexOf(' => ');
       changedFiles.push(arrowIndex >= 0 ? pathPart.slice(arrowIndex + 4) : pathPart);
     }
