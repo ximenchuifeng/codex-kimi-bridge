@@ -155,6 +155,20 @@ export interface ReviewPackageResult {
     additions: number;
     deletions: number;
     diffsWithContent: number;
+    committed: {
+      available: boolean;
+      filesChanged: number;
+      additions: number;
+      deletions: number;
+      commits: number;
+      unavailableReason?: string;
+    };
+    workingTree: {
+      available: boolean;
+      filesChanged: number;
+      additions: number;
+      deletions: number;
+    };
   };
   reviewChecklist: string[];
 }
@@ -207,6 +221,27 @@ function baselineMetadata(baseline: GitBaseline): Record<string, unknown> {
       ...(baseline.baseBranch ? { base_branch: baseline.baseBranch } : {}),
       initial_dirty_paths: baseline.initialDirtyPaths,
     },
+  };
+}
+
+function parseBaselineMetadata(metadata: Record<string, unknown> | undefined): GitBaseline | undefined {
+  if (!metadata || typeof metadata !== 'object') return undefined;
+  const bridge = metadata.codex_kimi_bridge;
+  if (!bridge || typeof bridge !== 'object' || (bridge as Record<string, unknown>).schema_version !== 1) {
+    return undefined;
+  }
+  const bridgeObj = bridge as Record<string, unknown>;
+  const baseCommit = typeof bridgeObj.base_commit === 'string' ? bridgeObj.base_commit : undefined;
+  if (!baseCommit) return undefined;
+  const baseBranch = typeof bridgeObj.base_branch === 'string' ? bridgeObj.base_branch : undefined;
+  const initialDirtyPaths = Array.isArray(bridgeObj.initial_dirty_paths)
+    ? bridgeObj.initial_dirty_paths.filter((p): p is string => typeof p === 'string')
+    : [];
+  return {
+    schemaVersion: 1,
+    baseCommit,
+    baseBranch,
+    initialDirtyPaths,
   };
 }
 
@@ -474,6 +509,8 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
 
   function buildReviewPackage(sessionId: string, handoff: KimiHandoff): ReviewPackageResult {
     const diffsWithContent = handoff.diffs.filter((d) => d.diff.length > 0).length;
+    const committed = handoff.committedChanges;
+    const workingTree = handoff.workingTreeChanges;
     return {
       sessionId,
       webUrl: buildWebUrl(deps.config.serverUrl, sessionId),
@@ -484,11 +521,27 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
         additions: handoff.additions,
         deletions: handoff.deletions,
         diffsWithContent,
+        committed: {
+          available: committed.available,
+          filesChanged: committed.changedFiles.length,
+          additions: committed.additions,
+          deletions: committed.deletions,
+          commits: handoff.commits.length,
+          unavailableReason: committed.unavailableReason,
+        },
+        workingTree: {
+          available: workingTree.available,
+          filesChanged: workingTree.changedFiles.length,
+          additions: workingTree.additions,
+          deletions: workingTree.deletions,
+        },
       },
       reviewChecklist: [
-        '检查 changedFiles 是否符合 scope',
-        '检查 tests/verification 是否在 handoff 中出现',
-        '检查 diff 是否包含无关改动',
+        '检查 committedChanges：Kimi 从 baseCommit 到 HEAD 的提交证据',
+        '检查 workingTreeChanges：当前工作区/暂存区改动',
+        '检查 initialDirtyPaths： delegation 前已存在的未提交改动',
+        '若 committedChanges.available 为 false，按 unavailableReason 直接 git log/git diff 核查',
+        '不要仅因 working tree 干净就推断没有改动',
         '必要时继续调用 kimi_continue_task',
       ],
     };
@@ -746,15 +799,54 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
       ]);
 
       const fileLister = deps.fileLister ?? defaultFileLister;
-      const changedFiles = await expandGitStatusEntries({
+      const workingTreeFiles = await expandGitStatusEntries({
         entries: gitStatus.entries,
         baseDir: session.metadata.cwd,
         listFiles: fileLister.listFiles.bind(fileLister),
       });
 
-      const diffs = await Promise.all(changedFiles.map((path) => deps.kimi.getFileDiff(input.sessionId, path)));
+      const workingTreeDiffs = await Promise.all(
+        workingTreeFiles.map((path) => deps.kimi.getFileDiff(input.sessionId, path)),
+      );
 
-      return buildHandoff({ messages, gitStatus, diffs, waitStatus: session.status, changedFiles, serverToken: deps.config.serverToken });
+      const workingTreeChanges = {
+        available: true,
+        changedFiles: workingTreeFiles,
+        additions: gitStatus.additions,
+        deletions: gitStatus.deletions,
+        diffs: workingTreeDiffs.map((item) => ({ ...item, source: 'working_tree' as const })),
+        truncatedPaths: [],
+      };
+
+      const baseline = parseBaselineMetadata(session.metadata);
+      let committedResult:
+        | { baseCommit?: string; headCommit?: string; commits: Awaited<ReturnType<GitInspector['collectCommittedChanges']>>['commits']; changeSet: Awaited<ReturnType<GitInspector['collectCommittedChanges']>>['changeSet'] }
+        | undefined;
+      try {
+        committedResult = await gitInspector.collectCommittedChanges(session.metadata.cwd, baseline);
+      } catch {
+        // Committed inspection failure must not discard working-tree evidence.
+      }
+
+      return buildHandoff({
+        messages,
+        waitStatus: session.status,
+        serverToken: deps.config.serverToken,
+        baseCommit: committedResult?.baseCommit,
+        headCommit: committedResult?.headCommit,
+        commits: committedResult?.commits ?? [],
+        initialDirtyPaths: baseline?.initialDirtyPaths ?? [],
+        committedChanges: committedResult?.changeSet ?? {
+          available: false,
+          changedFiles: [],
+          additions: 0,
+          deletions: 0,
+          diffs: [],
+          truncatedPaths: [],
+          unavailableReason: 'baseline_unavailable',
+        },
+        workingTreeChanges,
+      });
     },
 
     async kimi_review_package(input: ReviewPackageInput) {

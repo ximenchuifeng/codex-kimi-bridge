@@ -37,16 +37,25 @@ export interface HandoffChangeSet {
 
 export interface BuildHandoffInput {
   messages: readonly HandoffMessage[];
-  gitStatus: GitStatusSummary;
-  diffs: readonly FileDiff[];
   waitStatus: string;
-  changedFiles?: string[];
   serverToken?: string;
+  baseCommit?: string;
+  headCommit?: string;
+  commits: readonly CommitSummary[];
+  initialDirtyPaths: readonly string[];
+  committedChanges: HandoffChangeSet;
+  workingTreeChanges: HandoffChangeSet;
 }
 
 export interface KimiHandoff {
   status: string;
   finalMessage: string;
+  baseCommit?: string;
+  headCommit?: string;
+  commits: CommitSummary[];
+  initialDirtyPaths: string[];
+  committedChanges: HandoffChangeSet;
+  workingTreeChanges: HandoffChangeSet;
   changedFiles: string[];
   additions: number;
   deletions: number;
@@ -60,19 +69,36 @@ export interface ExpandGitStatusEntriesInput {
   isUntrackedDir?: (path: string, status: string) => boolean;
 }
 
+function sortedUniqueUnion(a: readonly string[], b: readonly string[]): string[] {
+  return Array.from(new Set([...a, ...b])).sort();
+}
+
 export function buildHandoff(input: BuildHandoffInput): KimiHandoff {
   const finalMessage = selectLatestMeaningfulMessage(
     input.messages,
     'assistant',
     input.serverToken,
   ) ?? '';
+  const committed = input.committedChanges;
+  const working = input.workingTreeChanges;
+  const changedFiles = sortedUniqueUnion(committed.changedFiles, working.changedFiles);
+  const diffs = [
+    ...committed.diffs.slice().sort((a, b) => a.path.localeCompare(b.path)),
+    ...working.diffs.slice().sort((a, b) => a.path.localeCompare(b.path)),
+  ];
   return {
     status: input.waitStatus,
     finalMessage,
-    changedFiles: input.changedFiles ?? Object.keys(input.gitStatus.entries).sort(),
-    additions: input.gitStatus.additions,
-    deletions: input.gitStatus.deletions,
-    diffs: [...input.diffs],
+    baseCommit: input.baseCommit,
+    headCommit: input.headCommit,
+    commits: [...input.commits],
+    initialDirtyPaths: [...input.initialDirtyPaths],
+    committedChanges: committed,
+    workingTreeChanges: working,
+    changedFiles,
+    additions: committed.additions + working.additions,
+    deletions: committed.deletions + working.deletions,
+    diffs,
   };
 }
 

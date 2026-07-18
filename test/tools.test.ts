@@ -182,8 +182,124 @@ describe('tool handlers', () => {
     expect(handoff.status).toBe('idle');
     expect(handoff.finalMessage).toContain('files changed');
     expect(handoff.changedFiles).toEqual(['src/a.ts']);
-    expect(handoff.diffs).toEqual([{ path: 'src/a.ts', diff: '@@ diff for src/a.ts' }]);
+    expect(handoff.diffs).toEqual([{ path: 'src/a.ts', diff: '@@ diff for src/a.ts', source: 'working_tree' }]);
+    expect(handoff.workingTreeChanges.available).toBe(true);
+    expect(handoff.committedChanges.available).toBe(false);
     expect(kimi.getFileDiff).toHaveBeenCalledWith('s1', 'src/a.ts');
+  });
+
+  it('returns baseline_unavailable for legacy sessions without bridge metadata', async () => {
+    const kimi = makeKimi({
+      getRuntimeStatus: vi.fn(async () => 'idle'),
+      listMessages: vi.fn(async () => []),
+      getGitStatus: vi.fn(async () => ({ entries: {}, additions: 0, deletions: 0 })),
+    });
+    const handlers = createToolHandlers({ kimi, config: makeConfig(), preflight: makePreflight() });
+
+    const handoff = await handlers.kimi_get_handoff({ sessionId: 's1' });
+
+    expect(handoff.committedChanges.available).toBe(false);
+    expect(handoff.committedChanges.unavailableReason).toBe('baseline_unavailable');
+    expect(handoff.initialDirtyPaths).toEqual([]);
+  });
+
+  it('includes committed changes when baseline metadata is present and working tree is clean', async () => {
+    const baseline = {
+      schemaVersion: 1 as const,
+      baseCommit: 'a'.repeat(40),
+      initialDirtyPaths: [],
+    };
+    const kimi = makeKimi({
+      getRuntimeStatus: vi.fn(async () => 'idle'),
+      listMessages: vi.fn(async () => [{ role: 'assistant', content: 'committed only' }]),
+      getGitStatus: vi.fn(async () => ({ entries: {}, additions: 0, deletions: 0 })),
+      getSession: vi.fn(async () => ({
+        id: 's1',
+        title: 'test',
+        status: 'idle',
+        metadata: { cwd: '/repo', codex_kimi_bridge: { schema_version: 1, base_commit: baseline.baseCommit, initial_dirty_paths: [] } },
+        agent_config: {},
+        last_seq: 0,
+      })),
+    });
+    const gitInspector: GitInspector = {
+      captureBaseline: vi.fn<GitInspector['captureBaseline']>(async () => ({ available: false, unavailableReason: 'not_a_git_repository' })),
+      collectCommittedChanges: vi.fn<GitInspector['collectCommittedChanges']>(async () => ({
+        baseCommit: baseline.baseCommit,
+        headCommit: 'b'.repeat(40),
+        commits: [{ sha: 'b'.repeat(40), shortSha: 'b'.repeat(7), subject: 'feat: commit' }],
+        changeSet: {
+          available: true,
+          changedFiles: ['committed.ts'],
+          additions: 5,
+          deletions: 1,
+          diffs: [{ path: 'committed.ts', diff: '@@ committed', source: 'committed' }],
+          truncatedPaths: [],
+        },
+      })),
+    };
+    const handlers = createToolHandlers({ kimi, config: makeConfig(), preflight: makePreflight(), gitInspector });
+
+    const handoff = await handlers.kimi_get_handoff({ sessionId: 's1' });
+
+    expect(handoff.baseCommit).toBe(baseline.baseCommit);
+    expect(handoff.headCommit).toBe('b'.repeat(40));
+    expect(handoff.commits).toEqual([{ sha: 'b'.repeat(40), shortSha: 'b'.repeat(7), subject: 'feat: commit' }]);
+    expect(handoff.committedChanges.changedFiles).toEqual(['committed.ts']);
+    expect(handoff.workingTreeChanges.changedFiles).toEqual([]);
+    expect(handoff.changedFiles).toEqual(['committed.ts']);
+    expect(handoff.additions).toBe(5);
+    expect(handoff.deletions).toBe(1);
+    expect(handoff.finalMessage).toBe('committed only');
+  });
+
+  it('aggregates committed and working-tree changes for the same path', async () => {
+    const baseline = {
+      schemaVersion: 1 as const,
+      baseCommit: 'a'.repeat(40),
+      initialDirtyPaths: [],
+    };
+    const kimi = makeKimi({
+      getRuntimeStatus: vi.fn(async () => 'idle'),
+      listMessages: vi.fn(async () => []),
+      getGitStatus: vi.fn(async () => ({ entries: { 'same.ts': 'M' }, additions: 2, deletions: 1 })),
+      getFileDiff: vi.fn(async (_sessionId: string, path: string) => ({ path, diff: '@@ working same' })),
+      getSession: vi.fn(async () => ({
+        id: 's1',
+        title: 'test',
+        status: 'idle',
+        metadata: { cwd: '/repo', codex_kimi_bridge: { schema_version: 1, base_commit: baseline.baseCommit, initial_dirty_paths: [] } },
+        agent_config: {},
+        last_seq: 0,
+      })),
+    });
+    const gitInspector: GitInspector = {
+      captureBaseline: vi.fn<GitInspector['captureBaseline']>(async () => ({ available: false, unavailableReason: 'not_a_git_repository' })),
+      collectCommittedChanges: vi.fn<GitInspector['collectCommittedChanges']>(async () => ({
+        baseCommit: baseline.baseCommit,
+        headCommit: 'b'.repeat(40),
+        commits: [{ sha: 'b'.repeat(40), shortSha: 'b'.repeat(7), subject: 'feat' }],
+        changeSet: {
+          available: true,
+          changedFiles: ['same.ts'],
+          additions: 3,
+          deletions: 0,
+          diffs: [{ path: 'same.ts', diff: '@@ committed same', source: 'committed' }],
+          truncatedPaths: [],
+        },
+      })),
+    };
+    const handlers = createToolHandlers({ kimi, config: makeConfig(), preflight: makePreflight(), gitInspector });
+
+    const handoff = await handlers.kimi_get_handoff({ sessionId: 's1' });
+
+    expect(handoff.changedFiles).toEqual(['same.ts']);
+    expect(handoff.additions).toBe(5);
+    expect(handoff.deletions).toBe(1);
+    expect(handoff.diffs.filter((d) => d.path === 'same.ts')).toEqual([
+      expect.objectContaining({ source: 'committed' }),
+      expect.objectContaining({ source: 'working_tree' }),
+    ]);
   });
 
   it('builds handoff status from the normalized Session resource', async () => {
@@ -281,10 +397,16 @@ describe('tool handlers', () => {
     expect(result.webUrl).toBe('http://127.0.0.1:58627/sessions/s1');
     expect(result.handoff).toMatchObject({ status: 'idle', changedFiles: ['src/a.ts', 'src/b.ts'], additions: 10, deletions: 2 });
     expect(result.changedFiles).toEqual(result.handoff.changedFiles);
-    expect(result.diffStats).toEqual({ filesChanged: 2, additions: 10, deletions: 2, diffsWithContent: 1 });
-    expect(result.reviewChecklist).toContain('检查 changedFiles 是否符合 scope');
-    expect(result.reviewChecklist).toContain('检查 tests/verification 是否在 handoff 中出现');
-    expect(result.reviewChecklist).toContain('检查 diff 是否包含无关改动');
+    expect(result.diffStats).toEqual({
+      filesChanged: 2,
+      additions: 10,
+      deletions: 2,
+      diffsWithContent: 1,
+      committed: { available: false, filesChanged: 0, additions: 0, deletions: 0, commits: 0, unavailableReason: 'baseline_unavailable' },
+      workingTree: { available: true, filesChanged: 2, additions: 10, deletions: 2 },
+    });
+    expect(result.reviewChecklist).toContain('检查 committedChanges：Kimi 从 baseCommit 到 HEAD 的提交证据');
+    expect(result.reviewChecklist).toContain('检查 workingTreeChanges：当前工作区/暂存区改动');
     expect(result.reviewChecklist).toContain('必要时继续调用 kimi_continue_task');
   });
 
@@ -473,7 +595,14 @@ describe('tool handlers', () => {
     expect(result.reviewPackage?.webUrl).toBe('http://127.0.0.1:58627/sessions/s1');
     expect(result.reviewPackage?.handoff).toBe(result.handoff);
     expect(result.reviewPackage?.changedFiles).toEqual(result.handoff?.changedFiles);
-    expect(result.reviewPackage?.diffStats).toEqual({ filesChanged: 1, additions: 4, deletions: 1, diffsWithContent: 1 });
+    expect(result.reviewPackage?.diffStats).toEqual({
+      filesChanged: 1,
+      additions: 4,
+      deletions: 1,
+      diffsWithContent: 1,
+      committed: { available: false, filesChanged: 0, additions: 0, deletions: 0, commits: 0, unavailableReason: 'baseline_unavailable' },
+      workingTree: { available: true, filesChanged: 1, additions: 4, deletions: 1 },
+    });
     expect(result.reviewPackage?.reviewChecklist.length).toBeGreaterThan(0);
   });
 
