@@ -1,5 +1,6 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
 import { OBJECT_ID_RE, type GitBaseline } from './git.js';
 
 export interface BaselineStore {
@@ -16,11 +17,19 @@ function safeFileName(input: string): string {
   return Buffer.from(input, 'utf8').toString('base64url');
 }
 
+function normalizeServerUrl(input: string): string {
+  return input.trim().toLowerCase();
+}
+
+function serverDirName(serverUrl: string): string {
+  return createHash('sha256').update(normalizeServerUrl(serverUrl), 'utf8').digest('hex');
+}
+
 export class FileBaselineStore implements BaselineStore {
   private readonly serverDir: string;
 
   constructor(options: FileBaselineStoreOptions) {
-    this.serverDir = join(options.stateDir, safeFileName(options.serverUrl));
+    this.serverDir = join(options.stateDir, serverDirName(options.serverUrl));
   }
 
   private filePath(sessionId: string): string {
@@ -29,7 +38,7 @@ export class FileBaselineStore implements BaselineStore {
 
   async save(sessionId: string, baseline: GitBaseline): Promise<void> {
     const file = this.filePath(sessionId);
-    const tempFile = `${file}.tmp`;
+    const tempFile = `${file}.${randomUUID()}.tmp`;
     await mkdir(this.serverDir, { recursive: true });
 
     const payload: Record<string, unknown> = {
@@ -47,8 +56,17 @@ export class FileBaselineStore implements BaselineStore {
       }));
     }
 
-    await writeFile(tempFile, JSON.stringify(payload), 'utf8');
-    await rename(tempFile, file);
+    try {
+      await writeFile(tempFile, JSON.stringify(payload), 'utf8');
+      await rename(tempFile, file);
+    } catch (err) {
+      try {
+        await rm(tempFile, { force: true });
+      } catch {
+        // Best-effort cleanup of the temporary file.
+      }
+      throw err;
+    }
   }
 
   async load(sessionId: string): Promise<GitBaseline | undefined> {
@@ -84,7 +102,9 @@ export class FileBaselineStore implements BaselineStore {
             const wt = item as Record<string, unknown>;
             const wtPath = typeof wt.path === 'string' ? wt.path : undefined;
             const headCommit = typeof wt.head_commit === 'string' ? wt.head_commit : undefined;
-            if (!wtPath || !headCommit) return undefined;
+            if (!wtPath || wtPath.length === 0 || !headCommit || !OBJECT_ID_RE.test(headCommit)) {
+              return undefined;
+            }
             return { path: wtPath, headCommit };
           })
           .filter((wt): wt is NonNullable<typeof wt> => wt !== undefined)

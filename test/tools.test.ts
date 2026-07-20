@@ -1296,6 +1296,199 @@ describe('tool handlers', () => {
     expect(preflight.ensureReady).toHaveBeenCalledTimes(1);
   });
 
+  it('propagates baselineStored through idle delegate_and_wait', async () => {
+    const baseline: GitBaseline = {
+      schemaVersion: 1,
+      baseCommit: 'a'.repeat(40),
+      initialDirtyPaths: [],
+    };
+    const gitInspector = makeGitInspector({ available: true, baseline });
+    const handlers = createToolHandlers({
+      kimi: makeKimi({ getRuntimeStatus: vi.fn(async () => 'idle') }),
+      config: makeConfig(),
+      preflight: makePreflight(),
+      gitInspector,
+    });
+
+    const result = await handlers.kimi_delegate_and_wait({
+      cwd: '/repo',
+      task: 'implement x',
+      acceptanceCriteria: ['tests pass'],
+      plan: ['edit code'],
+    });
+
+    expect(result.baselineStored).toBe(true);
+    expect(result.baselineStoreError).toBeUndefined();
+  });
+
+  it('propagates baselineStored through timeout delegate_and_wait', async () => {
+    const baseline: GitBaseline = {
+      schemaVersion: 1,
+      baseCommit: 'a'.repeat(40),
+      initialDirtyPaths: [],
+    };
+    const gitInspector = makeGitInspector({ available: true, baseline });
+    const handlers = createToolHandlers({
+      kimi: makeKimi({ getRuntimeStatus: vi.fn(async () => 'running') }),
+      config: makeConfig({ requestTimeoutMs: 20 }),
+      preflight: makePreflight(),
+      gitInspector,
+    });
+
+    const result = await handlers.kimi_delegate_and_wait({
+      cwd: '/repo',
+      task: 'implement x',
+      acceptanceCriteria: ['tests pass'],
+      plan: ['edit code'],
+      timeoutMs: 20,
+    });
+
+    expect(result.wait).toEqual({ status: 'timeout' });
+    expect(result.baselineStored).toBe(true);
+    expect(result.baselineStoreError).toBeUndefined();
+  });
+
+  it('propagates baselineStored through aborted delegate_and_wait', async () => {
+    const baseline: GitBaseline = {
+      schemaVersion: 1,
+      baseCommit: 'a'.repeat(40),
+      initialDirtyPaths: [],
+    };
+    const gitInspector = makeGitInspector({ available: true, baseline });
+    const handlers = createToolHandlers({
+      kimi: makeKimi({ getRuntimeStatus: vi.fn(async () => 'aborted') }),
+      config: makeConfig(),
+      preflight: makePreflight(),
+      gitInspector,
+    });
+
+    const result = await handlers.kimi_delegate_and_wait({
+      cwd: '/repo',
+      task: 'implement x',
+      acceptanceCriteria: ['tests pass'],
+      plan: ['edit code'],
+    });
+
+    expect(result.wait).toEqual({ status: 'aborted' });
+    expect(result.baselineStored).toBe(true);
+  });
+
+  it('propagates baselineStored through failed delegate_and_wait', async () => {
+    const baseline: GitBaseline = {
+      schemaVersion: 1,
+      baseCommit: 'a'.repeat(40),
+      initialDirtyPaths: [],
+    };
+    const gitInspector = makeGitInspector({ available: true, baseline });
+    const handlers = createToolHandlers({
+      kimi: makeKimi({ getRuntimeStatus: vi.fn(async () => 'failed') }),
+      config: makeConfig(),
+      preflight: makePreflight(),
+      gitInspector,
+    });
+
+    const result = await handlers.kimi_delegate_and_wait({
+      cwd: '/repo',
+      task: 'implement x',
+      acceptanceCriteria: ['tests pass'],
+      plan: ['edit code'],
+    });
+
+    expect(result.wait).toEqual({ status: 'failed' });
+    expect(result.baselineStored).toBe(true);
+  });
+
+  it('propagates baselineStoreError through delegate_and_wait when storage fails', async () => {
+    const baseline: GitBaseline = {
+      schemaVersion: 1,
+      baseCommit: 'a'.repeat(40),
+      initialDirtyPaths: [],
+    };
+    const gitInspector = makeGitInspector({ available: true, baseline });
+    const failingStore: BaselineStore = {
+      save: vi.fn(async () => { throw new Error('disk full'); }),
+      load: vi.fn(async () => undefined),
+    };
+    const handlers = createToolHandlers({
+      kimi: makeKimi({ getRuntimeStatus: vi.fn(async () => 'idle') }),
+      config: makeConfig(),
+      preflight: makePreflight(),
+      gitInspector,
+      baselineStore: failingStore,
+    });
+
+    const result = await handlers.kimi_delegate_and_wait({
+      cwd: '/repo',
+      task: 'implement x',
+      acceptanceCriteria: ['tests pass'],
+      plan: ['edit code'],
+    });
+
+    expect(result.baselineStored).toBe(false);
+    expect(result.baselineStoreError).toContain('disk full');
+  });
+
+  it('does not fabricate baselineStored for reused dedupe sessions', async () => {
+    const kimi = makeKimi({
+      listSessions: vi.fn(async () => ({
+        items: [
+          { id: 's2', title: 'implement x', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+        ],
+      })),
+      getRuntimeStatus: vi.fn(async () => 'idle'),
+      listMessages: vi.fn(async () => []),
+      getGitStatus: vi.fn(async () => ({ entries: {}, additions: 0, deletions: 0 })),
+      getSession: vi.fn(async () => ({ id: 's2', title: 'implement x', status: 'idle', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 })),
+    });
+    const handlers = createToolHandlers({ kimi: kimi as never, config: makeConfig(), preflight: makePreflight() });
+
+    const result = await handlers.kimi_delegate_and_wait({
+      cwd: '/repo',
+      task: 'implement x',
+      acceptanceCriteria: ['tests pass'],
+      plan: ['edit code'],
+      dedupe: { titleContains: 'implement x', reuseIfStatus: ['idle'] },
+    });
+
+    expect(result.dedupe?.reused).toBe(true);
+    expect(result.baselineStored).toBeUndefined();
+    expect(result.baselineStoreError).toBeUndefined();
+  });
+
+  it('propagates baselineStored for newly-delegated dedupe sessions', async () => {
+    const baseline: GitBaseline = {
+      schemaVersion: 1,
+      baseCommit: 'a'.repeat(40),
+      initialDirtyPaths: [],
+    };
+    const gitInspector = makeGitInspector({ available: true, baseline });
+    const kimi = makeKimi({
+      listSessions: vi.fn(async () => ({
+        items: [
+          { id: 's2', title: 'implement x', status: 'failed', metadata: { cwd: '/repo' }, agent_config: {}, last_seq: 0 },
+        ],
+      })),
+      getRuntimeStatus: vi.fn(async () => 'idle'),
+    });
+    const handlers = createToolHandlers({
+      kimi: kimi as never,
+      config: makeConfig(),
+      preflight: makePreflight(),
+      gitInspector,
+    });
+
+    const result = await handlers.kimi_delegate_and_wait({
+      cwd: '/repo',
+      task: 'implement x',
+      acceptanceCriteria: ['tests pass'],
+      plan: ['edit code'],
+      dedupe: { titleContains: 'implement x', reuseIfStatus: ['idle'] },
+    });
+
+    expect(result.dedupe?.reused).toBe(false);
+    expect(result.baselineStored).toBe(true);
+  });
+
   it('preflights before listing recent sessions', async () => {
     const preflight = makePreflight();
     const handlers = createToolHandlers({ kimi: makeKimi(), config: makeConfig(), preflight });

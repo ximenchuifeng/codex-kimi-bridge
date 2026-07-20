@@ -101,7 +101,9 @@ $KIMI_BRIDGE_STATE_DIR/<server-identity>/<session-id>.json
 - Default: `~/.codex-kimi-bridge/state`
 - Override: `KIMI_BRIDGE_STATE_DIR=/path/to/state`
 - Each file contains only the baseline commit, branch, initial dirty paths, and delegation-time worktree snapshot. No token or credential is stored.
-- Files are written atomically (`write` to a temp file, then `rename`) and validated when read.
+- The `<server-identity>` directory is a one-way SHA-256 hash of the normalized server URL, not the URL itself.
+- Files are written atomically to a unique temp file per save, then renamed into place; temp files are cleaned up on failure.
+- Stored worktree snapshots are validated when read; invalid entries are ignored.
 - If writing a baseline fails, delegation still proceeds and the result reports `baselineStored: false` with a safe `baselineStoreError`.
 
 ### Preflight cache
@@ -289,6 +291,7 @@ The result includes:
 - `handoff` and `changedFiles` only when `wait.status` is `idle`
 - `reviewPackage` only when `wait.status` is `idle`, with the same structure as `kimi_review_package`
 - `diagnostics` only when `wait.status` is `timeout`, `aborted`, or `failed`
+- `baselineStored` and `baselineStoreError` whenever a new session was created (omitted when a session was reused through `dedupe`)
 
 When `wait.status` is `idle`, the returned `reviewPackage` is ready for Codex review immediately. It contains `sessionId`, `webUrl`, `handoff`, `changedFiles`, `diffStats`, and `reviewChecklist`, and it shares the same `handoff` object as the top-level `handoff` field. Codex should prefer using this embedded review package for the first review so that diff content is not lost before a separate `kimi_review_package` call.
 

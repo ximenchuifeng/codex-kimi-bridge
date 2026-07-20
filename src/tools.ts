@@ -572,9 +572,13 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
   }
 
   async function buildDelegateAndWaitResult(
-    delegated: { sessionId: string; promptId: string; status: string; webUrl: string },
+    delegated: { sessionId: string; promptId: string; status: string; webUrl: string; baselineStored?: boolean; baselineStoreError?: string },
     wait: WaitUntilIdleResult,
   ): Promise<DelegateAndWaitResult> {
+    const baselineFields = {
+      ...(delegated.baselineStored !== undefined ? { baselineStored: delegated.baselineStored } : {}),
+      ...(delegated.baselineStoreError !== undefined ? { baselineStoreError: delegated.baselineStoreError } : {}),
+    };
     if (wait.status !== 'idle') {
       const result: DelegateAndWaitResult = {
         sessionId: delegated.sessionId,
@@ -582,6 +586,7 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
         submitStatus: delegated.status,
         webUrl: delegated.webUrl,
         wait,
+        ...baselineFields,
       };
       if (wait.status === 'timeout' || wait.status === 'aborted' || wait.status === 'failed') {
         result.diagnostics = await buildDelegateAndWaitDiagnostics(
@@ -605,6 +610,7 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
       handoff,
       changedFiles: handoff.changedFiles,
       reviewPackage,
+      ...baselineFields,
     };
   }
 
