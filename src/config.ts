@@ -17,6 +17,7 @@ export interface BridgeConfig {
   kimiCommand: string;
   preflightCacheMs: number;
   kimiCodeHome?: string;
+  stateDir: string;
 }
 
 function normalizeServerUrl(raw: string): string {
@@ -89,5 +90,8 @@ export function loadBridgeConfig(env: NodeJS.ProcessEnv = process.env): BridgeCo
     kimiCommand: env.KIMI_COMMAND && env.KIMI_COMMAND.trim().length > 0 ? env.KIMI_COMMAND.trim() : 'kimi',
     preflightCacheMs: parsePreflightCacheMs(env.KIMI_PREFLIGHT_CACHE_MS),
     kimiCodeHome,
+    stateDir: env.KIMI_BRIDGE_STATE_DIR && env.KIMI_BRIDGE_STATE_DIR.trim().length > 0
+      ? env.KIMI_BRIDGE_STATE_DIR.trim()
+      : join(homedir(), '.codex-kimi-bridge', 'state'),
   };
 }

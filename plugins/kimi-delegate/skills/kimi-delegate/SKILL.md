@@ -38,7 +38,8 @@ Every task sent to Kimi must include:
    - A clean working tree does not prove Kimi made no changes; check `committedChanges` for commits and diffs.
    - `workingTreeChanges` may include pre-existing user work listed in `initialDirtyPaths`.
    - `committedChanges.available: false` means evidence is unavailable, not empty; use `unavailableReason` and direct `git log`/`git diff` when needed.
-   - Check `reviewWorkspace` to see which worktree supplied the committed evidence. If it differs from the session `cwd`, `workingTreeChanges` is marked `review_workspace_mismatch` instead of showing the wrong working tree.
+   - The bridge persists Git baselines in a local store first, then falls back to session metadata. Check `reviewWorkspace` to see which worktree supplied the committed evidence.
+   - If `reviewWorkspace` differs from the session `cwd`, `workingTreeChanges` is marked `review_workspace_mismatch` instead of showing the wrong working tree.
    - `ambiguous_worktrees` means multiple worktrees advanced from the baseline; inspect `committedDiagnostics` and review Git directly.
 6. Review against acceptance criteria.
 7. Send precise follow-up feedback to Kimi if review fails.

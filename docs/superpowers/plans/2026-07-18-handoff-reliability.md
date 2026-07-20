@@ -287,19 +287,27 @@ git commit -m "feat: inspect committed Kimi changes from Git baseline"
 ### Task 3: Persist Baseline On New Kimi Sessions
 
 **Files:**
+- Create: `src/baseline-store.ts`
+- Modify: `src/config.ts`
+- Modify: `src/index.ts`
 - Modify: `src/kimi/client.ts`
 - Modify: `src/kimi/types.ts`
 - Modify: `src/tools.ts`
+- Modify: `test/baseline-store.test.ts`
 - Modify: `test/client.test.ts`
-- Modify: `test/tools.test.ts`
+- Modify: `test/config.test.ts`
 - Modify: `test/fixtures/fake-kimi-server.ts`
+- Modify: `test/fixtures/run-review-package.ts`
+- Modify: `test/integration.test.ts`
+- Modify: `test/preflight.test.ts`
+- Modify: `test/tools.test.ts`
 
 **Interfaces:**
 - Consumes: `GitInspector.captureBaseline(cwd)` from Task 2.
-- Produces: `CreateSessionInput.metadata?: Record<string, unknown>` and the `codex_kimi_bridge` wire metadata object.
-- Changes: `ToolDeps` gains optional `gitInspector?: GitInspector`; production defaults to `NodeGitInspector`.
+- Produces: `BaselineStore` abstraction, `FileBaselineStore`, `InMemoryBaselineStore`, `KIMI_BRIDGE_STATE_DIR` config, and the `codex_kimi_bridge` wire metadata object.
+- Changes: `ToolDeps` gains optional `gitInspector?: GitInspector` and `baselineStore?: BaselineStore`; production defaults to `NodeGitInspector` and a `FileBaselineStore` under `KIMI_BRIDGE_STATE_DIR`.
 
-- [ ] **Step 1: Write failing client and delegation tests**
+- [ ] **Step 1: Write failing client, store, and delegation tests**
 
 Add a client test asserting:
 
@@ -319,12 +327,22 @@ expect(http.post).toHaveBeenCalledWith('/sessions', {
 });
 ```
 
-Add tool tests with an injected fake `GitInspector` proving:
+Add `test/baseline-store.test.ts` for `FileBaselineStore` proving:
 
-- A newly created session receives `codex_kimi_bridge` metadata with snake-case keys.
-- `initial_dirty_paths` and optional `base_branch` are preserved.
-- A failed baseline capture still creates and prompts the session without bridge metadata.
-- Passing `sessionId` skips both baseline capture and session creation.
+- Save/load round-trips a baseline.
+- Unknown sessions return `undefined`.
+- Invalid file contents are rejected.
+- Different sessions are isolated in separate files.
+- Baselines are isolated by server URL.
+- Files are written atomically.
+
+Add tool tests with an injected fake `GitInspector` and `BaselineStore` proving:
+
+- A newly created session saves the baseline to the store after `createSession` returns.
+- Session metadata stripped by a real-shaped server is recovered from the local store.
+- A missing store entry falls back to session metadata.
+- A failed store write reports `baselineStored: false` and a safe `baselineStoreError` without blocking Kimi execution.
+- Passing `sessionId` skips both baseline capture and store write.
 - A dedupe match skips new baseline capture.
 
 - [ ] **Step 2: Run focused tests and verify failure**
@@ -371,14 +389,16 @@ function baselineMetadata(baseline: GitBaseline): Record<string, unknown> {
 }
 ```
 
-In `kimi_delegate_task`, call `captureBaseline` only in the branch that creates a new session. Pass metadata only for an available baseline. Keep supplied-session behavior unchanged.
+In `kimi_delegate_task`, call `captureBaseline` only in the branch that creates a new session. Pass metadata only for an available baseline. After `createSession` returns, save the baseline to the injected `BaselineStore`. Keep supplied-session behavior unchanged.
+
+In `kimi_get_handoff`, load the baseline from the store first and fall back to session metadata only when the store has no entry.
 
 - [ ] **Step 4: Update the fake server and run focused tests**
 
-Make the fake server preserve posted session metadata rather than replacing it with only `cwd`. Run:
+Make the fake server strip posted session metadata down to only `cwd`, matching real Kimi 0.27 behavior. Add a cross-process persistence test that delegates in one process and fetches `review_package` from a fresh subprocess sharing only the state directory. Run:
 
 ```bash
-pnpm vitest run test/client.test.ts test/tools.test.ts test/integration.test.ts
+pnpm vitest run test/client.test.ts test/baseline-store.test.ts test/config.test.ts test/tools.test.ts test/integration.test.ts
 ```
 
 Expected: PASS, including existing delegation and integration behavior.
@@ -386,8 +406,8 @@ Expected: PASS, including existing delegation and integration behavior.
 - [ ] **Step 5: Commit baseline persistence**
 
 ```bash
-git add src/kimi/client.ts src/kimi/types.ts src/tools.ts test/client.test.ts test/tools.test.ts test/fixtures/fake-kimi-server.ts
-git commit -m "feat: persist delegation Git baseline in Kimi sessions"
+git add src/baseline-store.ts src/config.ts src/index.ts src/kimi/client.ts src/kimi/types.ts src/tools.ts test/baseline-store.test.ts test/client.test.ts test/config.test.ts test/fixtures/fake-kimi-server.ts test/fixtures/run-review-package.ts test/integration.test.ts test/preflight.test.ts test/tools.test.ts
+git commit -m "feat: persist delegation Git baseline in local durable store"
 ```
 
 ---

@@ -22,6 +22,7 @@ function makeConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     autoStart: true,
     kimiCommand: 'kimi',
     preflightCacheMs: 5000,
+    stateDir: '/tmp/kimi-bridge-preflight-test-state',
     ...overrides,
   };
 }

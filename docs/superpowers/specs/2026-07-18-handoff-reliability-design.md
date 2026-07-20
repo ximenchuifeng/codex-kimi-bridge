@@ -54,7 +54,9 @@ export interface GitBaseline {
 }
 ```
 
-The baseline is stored under a namespaced metadata key so it does not collide with Kimi-owned fields:
+The baseline is stored in a Bridge-owned local durable store because real Kimi 0.27 servers strip arbitrary session metadata. The store uses one file per session under `KIMI_BRIDGE_STATE_DIR` (default `~/.codex-kimi-bridge/state`), keyed by server identity and session id. Files contain no token or credential and are written atomically.
+
+For backward compatibility, the Bridge still sends the baseline under a namespaced metadata key:
 
 ```json
 {
@@ -68,13 +70,17 @@ The baseline is stored under a namespaced metadata key so it does not collide wi
 }
 ```
 
+At handoff time the Bridge loads the baseline from the local store first and falls back to parsing session metadata only when the store has no entry.
+
 Rules:
 
 - Baseline capture happens before `POST /sessions` and before Kimi receives the delegation prompt.
+- The baseline is saved to the local store after `createSession` returns a `sessionId` and before the delegation prompt is submitted.
 - A Git repository with no commit yet has no usable `baseCommit`; delegation still proceeds with an explicit baseline-unavailable state.
 - Failure to inspect Git must not prevent delegation.
+- Failure to write the local store must not block Kimi execution; the delegate result reports `baselineStored: false` with a safe error.
 - `initialDirtyPaths` is diagnostic evidence only. Version 1 does not subtract the original uncommitted diff from later working-tree changes.
-- When the caller supplies `sessionId`, the Bridge uses that session's existing metadata. It does not capture and attach a new baseline.
+- When the caller supplies `sessionId`, the Bridge uses that session's existing store entry or metadata. It does not capture and attach a new baseline.
 - A deduped or continued session keeps its original baseline for its entire lifetime.
 - Sessions created before this feature remain valid but cannot expose a trustworthy committed range.
 

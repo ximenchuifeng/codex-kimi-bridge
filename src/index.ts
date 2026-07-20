@@ -3,6 +3,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
+import { createDefaultBaselineStore } from './baseline-store.js';
 import { loadBridgeConfig } from './config.js';
 import { KimiApiError, KimiNetworkError } from './errors.js';
 import { KimiHttpClient } from './kimi/http.js';
@@ -79,7 +80,8 @@ export async function main(): Promise<void> {
   const http = new KimiHttpClient(config.serverUrl, fetch, config.requestTimeoutMs, config.serverToken);
   const preflight = new KimiPreflight(config, http);
   const kimi = new KimiClient(http);
-  const handlers = createToolHandlers({ kimi, config, preflight });
+  const baselineStore = createDefaultBaselineStore(config);
+  const handlers = createToolHandlers({ kimi, config, preflight, baselineStore });
   const server = new McpServer({ name: 'codex-kimi-bridge', version: '0.3.0' });
 
   server.tool(

@@ -7,9 +7,10 @@ import { buildHandoff, expandGitStatusEntries, type HandoffChangeSet } from './h
 import { sanitizeDiagnosticText, selectLatestMeaningfulMessage } from './messages.js';
 import type { BridgeRuntimeStatus, ListSessionsInput, RecentSession, RecentSessionSummary, RuntimeSession, WireSession } from './kimi/types.js';
 import type { BridgeStatus, KimiPreflight } from './preflight.js';
-import { readdir } from 'node:fs/promises';
+import { readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { NodeGitInspector, type GitInspector, type GitBaseline, OBJECT_ID_RE } from './git.js';
+import { InMemoryBaselineStore, type BaselineStore } from './baseline-store.js';
 
 export interface FileLister {
   listFiles(baseDir: string, relativeDir: string): Promise<string[]>;
@@ -21,6 +22,7 @@ export interface ToolDeps {
   preflight: KimiPreflight;
   fileLister?: FileLister;
   gitInspector?: GitInspector;
+  baselineStore?: BaselineStore;
 }
 
 export interface DelegateTaskInput {
@@ -123,6 +125,8 @@ export interface DelegateAndWaitResult {
   reviewPackage?: ReviewPackageResult;
   diagnostics?: DelegateAndWaitDiagnostics;
   dedupe?: DelegateAndWaitDedupeResult;
+  baselineStored?: boolean;
+  baselineStoreError?: string;
 }
 
 export interface DelegateAndWaitDedupeResult {
@@ -174,7 +178,7 @@ export interface ReviewPackageResult {
 }
 
 export interface ToolHandlers {
-  kimi_delegate_task: (input: DelegateTaskInput) => Promise<{ sessionId: string; promptId: string; status: string; webUrl: string }>;
+  kimi_delegate_task: (input: DelegateTaskInput) => Promise<{ sessionId: string; promptId: string; status: string; webUrl: string; baselineStored?: boolean; baselineStoreError?: string }>;
   kimi_delegate_and_wait: (input: DelegateAndWaitInput) => Promise<DelegateAndWaitResult>;
   kimi_wait_until_idle: (input: WaitUntilIdleInput) => Promise<WaitUntilIdleResult>;
   kimi_get_handoff: (input: GetHandoffInput) => Promise<KimiHandoff>;
@@ -525,6 +529,7 @@ const defaultFileLister: FileLister = {
 
 export function createToolHandlers(deps: ToolDeps): ToolHandlers {
   const gitInspector = deps.gitInspector ?? new NodeGitInspector();
+  const baselineStore = deps.baselineStore ?? new InMemoryBaselineStore();
 
   function buildReviewPackage(sessionId: string, handoff: KimiHandoff): ReviewPackageResult {
     const diffsWithContent = handoff.diffs.filter((d) => d.diff.length > 0).length;
@@ -640,6 +645,10 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
 
     async kimi_delegate_task(input: DelegateTaskInput) {
       let session: { id: string };
+      let baselineToStore: GitBaseline | undefined;
+      let baselineStored: boolean | undefined;
+      let baselineStoreError: string | undefined;
+
       if (input.sessionId) {
         session = { id: input.sessionId };
       } else {
@@ -648,11 +657,22 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
           const baselineResult = await gitInspector.captureBaseline(input.cwd);
           if (baselineResult.available) {
             metadata = baselineMetadata(baselineResult.baseline);
+            baselineToStore = baselineResult.baseline;
           }
         } catch {
           // Failure to inspect Git must not prevent delegation.
         }
         session = await deps.kimi.createSession({ cwd: input.cwd, title: input.task.slice(0, 80), metadata });
+        if (baselineToStore) {
+          try {
+            await baselineStore.save(session.id, baselineToStore);
+            baselineStored = true;
+          } catch (err) {
+            baselineStored = false;
+            const rawError = err instanceof Error ? err.message : String(err);
+            baselineStoreError = sanitizeDiagnosticText(rawError, deps.config.serverToken);
+          }
+        }
       }
       const prompt = buildDelegationPrompt({
         task: input.task,
@@ -668,7 +688,14 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
         planMode: false,
         swarmMode: input.swarmMode,
       });
-      return { sessionId: session.id, promptId: result.prompt_id, status: result.status, webUrl: buildWebUrl(deps.config.serverUrl, session.id) };
+      return {
+        sessionId: session.id,
+        promptId: result.prompt_id,
+        status: result.status,
+        webUrl: buildWebUrl(deps.config.serverUrl, session.id),
+        ...(baselineStored !== undefined ? { baselineStored } : {}),
+        ...(baselineStoreError !== undefined ? { baselineStoreError } : {}),
+      };
     },
 
     async kimi_delegate_and_wait(input: DelegateAndWaitInput) {
@@ -828,7 +855,8 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
         workingTreeFiles.map((path) => deps.kimi.getFileDiff(input.sessionId, path)),
       );
 
-      const baseline = parseBaselineMetadata(session.metadata);
+      const storedBaseline = await baselineStore.load(input.sessionId);
+      const baseline = storedBaseline ?? parseBaselineMetadata(session.metadata);
       let committedResult:
         | { baseCommit?: string; headCommit?: string; reviewWorkspace?: string; commits: Awaited<ReturnType<GitInspector['collectCommittedChanges']>>['commits']; changeSet: Awaited<ReturnType<GitInspector['collectCommittedChanges']>>['changeSet']; diagnostics?: unknown }
         | undefined;
@@ -838,7 +866,7 @@ export function createToolHandlers(deps: ToolDeps): ToolHandlers {
         // Committed inspection failure must not discard working-tree evidence.
       }
 
-      const sessionCwd = session.metadata.cwd;
+      const sessionCwd = await realpath(session.metadata.cwd).catch(() => session.metadata.cwd);
       const reviewWorkspace = committedResult?.reviewWorkspace;
       const workingTreeChanges: HandoffChangeSet =
         reviewWorkspace && reviewWorkspace !== sessionCwd

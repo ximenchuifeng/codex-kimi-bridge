@@ -3,7 +3,8 @@ import { createToolHandlers } from '../src/tools.js';
 import type { KimiClient } from '../src/kimi/client.js';
 import type { BridgeConfig } from '../src/config.js';
 import type { KimiPreflight } from '../src/preflight.js';
-import type { GitInspector } from '../src/git.js';
+import type { GitInspector, GitBaseline } from '../src/git.js';
+import { InMemoryBaselineStore, type BaselineStore } from '../src/baseline-store.js';
 
 function makeKimi(overrides: Record<string, unknown> = {}): KimiClient {
   return {
@@ -36,6 +37,7 @@ function makeConfig(overrides: Partial<BridgeConfig> = {}): BridgeConfig {
     autoStart: true,
     kimiCommand: 'kimi',
     preflightCacheMs: 5000,
+    stateDir: '/tmp/kimi-bridge-tools-test-state',
     ...overrides,
   };
 }
@@ -79,6 +81,14 @@ function makeGitInspector(result: import('../src/git.js').BaselineCaptureResult)
       },
     })),
   } as unknown as GitInspector;
+}
+
+function makeBaselineStore(baselines: Record<string, GitBaseline> = {}): BaselineStore {
+  const store = new InMemoryBaselineStore();
+  for (const [sessionId, baseline] of Object.entries(baselines)) {
+    store.save(sessionId, baseline).catch(() => undefined);
+  }
+  return store;
 }
 
 describe('tool handlers', () => {
@@ -273,6 +283,160 @@ describe('tool handlers', () => {
     expect(handoff.additions).toBe(5);
     expect(handoff.deletions).toBe(1);
     expect(handoff.finalMessage).toBe('committed only');
+  });
+
+  it('saves baseline to the injected store after creating a new session', async () => {
+    const baseline: GitBaseline = {
+      schemaVersion: 1,
+      baseCommit: 'a'.repeat(40),
+      initialDirtyPaths: ['src/a.ts'],
+    };
+    const gitInspector = makeGitInspector({ available: true, baseline });
+    const baselineStore = makeBaselineStore();
+    const handlers = createToolHandlers({ kimi: makeKimi(), config: makeConfig(), preflight: makePreflight(), gitInspector, baselineStore });
+
+    await handlers.kimi_delegate_task({
+      cwd: '/repo',
+      task: 'implement x',
+      acceptanceCriteria: ['passes tests'],
+      plan: ['edit code'],
+    });
+
+    expect(await baselineStore.load('s1')).toEqual(baseline);
+  });
+
+  it('loads baseline from the injected store when server metadata was stripped', async () => {
+    const baseline: GitBaseline = {
+      schemaVersion: 1,
+      baseCommit: 'a'.repeat(40),
+      initialDirtyPaths: [],
+    };
+    const kimi = makeKimi({
+      getRuntimeStatus: vi.fn(async () => 'idle'),
+      listMessages: vi.fn(async () => []),
+      getGitStatus: vi.fn(async () => ({ entries: {}, additions: 0, deletions: 0 })),
+      getSession: vi.fn(async () => ({
+        id: 's1',
+        title: 'test',
+        status: 'idle',
+        metadata: { cwd: '/repo' },
+        agent_config: {},
+        last_seq: 0,
+      })),
+    });
+    const gitInspector: GitInspector = {
+      captureBaseline: vi.fn<GitInspector['captureBaseline']>(async () => ({ available: false, unavailableReason: 'not_a_git_repository' })),
+      collectCommittedChanges: vi.fn<GitInspector['collectCommittedChanges']>(async () => ({
+        baseCommit: baseline.baseCommit,
+        headCommit: 'b'.repeat(40),
+        commits: [{ sha: 'b'.repeat(40), shortSha: 'b'.repeat(7), subject: 'feat: commit' }],
+        changeSet: {
+          available: true,
+          changedFiles: ['committed.ts'],
+          additions: 5,
+          deletions: 1,
+          diffs: [{ path: 'committed.ts', diff: '@@ committed', source: 'committed' }],
+          truncatedPaths: [],
+        },
+      })),
+    };
+    const baselineStore = makeBaselineStore({ s1: baseline });
+    const handlers = createToolHandlers({ kimi, config: makeConfig(), preflight: makePreflight(), gitInspector, baselineStore });
+
+    const handoff = await handlers.kimi_get_handoff({ sessionId: 's1' });
+
+    expect(handoff.committedChanges.available).toBe(true);
+    expect(handoff.committedChanges.changedFiles).toEqual(['committed.ts']);
+  });
+
+  it('falls back to metadata baseline when the store has no entry', async () => {
+    const baseline = {
+      schemaVersion: 1 as const,
+      baseCommit: 'a'.repeat(40),
+      initialDirtyPaths: [],
+    };
+    const kimi = makeKimi({
+      getRuntimeStatus: vi.fn(async () => 'idle'),
+      listMessages: vi.fn(async () => []),
+      getGitStatus: vi.fn(async () => ({ entries: {}, additions: 0, deletions: 0 })),
+      getSession: vi.fn(async () => ({
+        id: 's1',
+        title: 'test',
+        status: 'idle',
+        metadata: { cwd: '/repo', codex_kimi_bridge: { schema_version: 1, base_commit: baseline.baseCommit, initial_dirty_paths: [] } },
+        agent_config: {},
+        last_seq: 0,
+      })),
+    });
+    const gitInspector: GitInspector = {
+      captureBaseline: vi.fn<GitInspector['captureBaseline']>(async () => ({ available: false, unavailableReason: 'not_a_git_repository' })),
+      collectCommittedChanges: vi.fn<GitInspector['collectCommittedChanges']>(async () => ({
+        baseCommit: baseline.baseCommit,
+        headCommit: 'b'.repeat(40),
+        commits: [{ sha: 'b'.repeat(40), shortSha: 'b'.repeat(7), subject: 'feat: commit' }],
+        changeSet: {
+          available: true,
+          changedFiles: ['committed.ts'],
+          additions: 5,
+          deletions: 1,
+          diffs: [{ path: 'committed.ts', diff: '@@ committed', source: 'committed' }],
+          truncatedPaths: [],
+        },
+      })),
+    };
+    const baselineStore = makeBaselineStore();
+    const handlers = createToolHandlers({ kimi, config: makeConfig(), preflight: makePreflight(), gitInspector, baselineStore });
+
+    const handoff = await handlers.kimi_get_handoff({ sessionId: 's1' });
+
+    expect(handoff.committedChanges.available).toBe(true);
+    expect(handoff.committedChanges.changedFiles).toEqual(['committed.ts']);
+  });
+
+  it('does not save a baseline when a sessionId is supplied', async () => {
+    const baseline: GitBaseline = {
+      schemaVersion: 1,
+      baseCommit: 'a'.repeat(40),
+      initialDirtyPaths: [],
+    };
+    const gitInspector = makeGitInspector({ available: true, baseline });
+    const baselineStore = makeBaselineStore();
+    const handlers = createToolHandlers({ kimi: makeKimi(), config: makeConfig(), preflight: makePreflight(), gitInspector, baselineStore });
+
+    await handlers.kimi_delegate_task({
+      cwd: '/repo',
+      sessionId: 'existing-session',
+      task: 'continue x',
+      acceptanceCriteria: ['passes tests'],
+      plan: ['edit code'],
+    });
+
+    expect(await baselineStore.load('existing-session')).toBeUndefined();
+  });
+
+  it('reports baseline store failure without blocking delegation', async () => {
+    const baseline: GitBaseline = {
+      schemaVersion: 1,
+      baseCommit: 'a'.repeat(40),
+      initialDirtyPaths: [],
+    };
+    const gitInspector = makeGitInspector({ available: true, baseline });
+    const failingStore: BaselineStore = {
+      save: vi.fn(async () => { throw new Error('disk full'); }),
+      load: vi.fn(async () => undefined),
+    };
+    const handlers = createToolHandlers({ kimi: makeKimi(), config: makeConfig(), preflight: makePreflight(), gitInspector, baselineStore: failingStore });
+
+    const result = await handlers.kimi_delegate_task({
+      cwd: '/repo',
+      task: 'implement x',
+      acceptanceCriteria: ['passes tests'],
+      plan: ['edit code'],
+    });
+
+    expect(result.sessionId).toBe('s1');
+    expect(result.baselineStored).toBe(false);
+    expect(result.baselineStoreError).toContain('disk full');
   });
 
   it('aggregates committed and working-tree changes for the same path', async () => {

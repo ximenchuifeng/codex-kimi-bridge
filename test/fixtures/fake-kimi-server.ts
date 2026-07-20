@@ -56,7 +56,9 @@ export async function startFakeKimiServer(): Promise<FakeKimiServer> {
       currentSession = {
         ...baseSession,
         ...(body.title ? { title: body.title } : {}),
-        metadata: { ...baseSession.metadata, ...body.metadata },
+        // Real Kimi 0.27 only preserves cwd in session metadata and drops
+        // arbitrary bridge metadata, so the fixture strips everything else.
+        metadata: { cwd: body.metadata?.cwd ?? baseSession.metadata.cwd },
       };
       res.end(envelope(currentSession));
       return;
@@ -89,6 +91,10 @@ export async function startFakeKimiServer(): Promise<FakeKimiServer> {
         max_context_tokens: 262144,
         context_usage: 0,
       }));
+      return;
+    }
+    if (req.method === 'GET' && req.url === '/api/v1/healthz') {
+      res.end(envelope({ status: 'ok' }));
       return;
     }
     if (req.method === 'GET' && req.url === '/api/v1/meta') {

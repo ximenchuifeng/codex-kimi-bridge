@@ -90,6 +90,20 @@ If you use a custom `KIMI_CODE_HOME` for Kimi Code, make sure the bridge sees th
 export KIMI_CODE_HOME=/path/to/your/kimi/home
 ```
 
+### Local baseline state
+
+The bridge persists per-session Git baselines locally so that handoffs can report committed changes even when the Kimi server does not preserve arbitrary session metadata. Baselines are stored as one JSON file per session under:
+
+```text
+$KIMI_BRIDGE_STATE_DIR/<server-identity>/<session-id>.json
+```
+
+- Default: `~/.codex-kimi-bridge/state`
+- Override: `KIMI_BRIDGE_STATE_DIR=/path/to/state`
+- Each file contains only the baseline commit, branch, initial dirty paths, and delegation-time worktree snapshot. No token or credential is stored.
+- Files are written atomically (`write` to a temp file, then `rename`) and validated when read.
+- If writing a baseline fails, delegation still proceeds and the result reports `baselineStored: false` with a safe `baselineStoreError`.
+
 ### Preflight cache
 
 The bridge preflights the Kimi server before each tool call. A successful preflight result is cached for a short time so that a rapid sequence of calls does not repeat healthz + config checks.
@@ -352,6 +366,7 @@ Important review semantics:
 - A clean working tree does **not** prove Kimi made no changes; inspect `committedChanges`.
 - `workingTreeChanges` may include pre-existing user work listed in `initialDirtyPaths`.
 - `available: false` means the committed evidence is unavailable, not that there are zero committed changes. Use `unavailableReason` and direct `git log`/`git diff` when necessary.
+- The bridge loads the baseline from its local store first and falls back to session metadata only for backward compatibility. Real Kimi 0.27 servers strip extra metadata, so production handoffs depend on the durable local store.
 - `reviewWorkspace` selection uses the delegation-time worktree snapshot. Pre-existing worktrees that already differed from `baseCommit` are ignored, newly created or advanced worktrees are selected, and multiple equally plausible candidates return `ambiguous_worktrees` with candidate diagnostics.
 - Old sessions created before this feature lack a baseline and return `baseline_unavailable` for `committedChanges`.
 

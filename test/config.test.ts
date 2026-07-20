@@ -22,6 +22,7 @@ describe('loadBridgeConfig', () => {
         kimiCommand: 'kimi',
         preflightCacheMs: 5000,
         kimiCodeHome: undefined,
+        stateDir: join(tmpHome, '.codex-kimi-bridge', 'state'),
       });
     } finally {
       vi.unstubAllEnvs();
@@ -56,6 +57,18 @@ describe('loadBridgeConfig', () => {
     expect(loadBridgeConfig({}).kimiCommand).toBe('kimi');
     expect(loadBridgeConfig({ KIMI_COMMAND: '/opt/kimi/bin/kimi' }).kimiCommand).toBe('/opt/kimi/bin/kimi');
     expect(loadBridgeConfig({ KIMI_CODE_HOME: '/custom/home' }).kimiCodeHome).toBe('/custom/home');
+  });
+
+  it('uses KIMI_BRIDGE_STATE_DIR or a home-based default', () => {
+    const tmpHome = mkdtempSync(join(tmpdir(), 'kimi-bridge-test-'));
+    vi.stubEnv('HOME', tmpHome);
+    try {
+      expect(loadBridgeConfig({}).stateDir).toBe(join(tmpHome, '.codex-kimi-bridge', 'state'));
+      expect(loadBridgeConfig({ KIMI_BRIDGE_STATE_DIR: '/custom/state' }).stateDir).toBe('/custom/state');
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(tmpHome, { recursive: true, force: true });
+    }
   });
 
   describe('server token resolution', () => {

@@ -132,6 +132,8 @@ Delegate and review tools return `webUrl`, which can be opened in Kimi Web to wa
 - `reviewWorkspace`: the worktree path whose `HEAD` advanced from the baseline and supplied `committedChanges`. When Kimi committed in a nested worktree, this reveals the real location of the commits.
 - Top-level `changedFiles`, `additions`, `deletions`, and `diffs` aggregate both sources for compatibility.
 
+Baselines are persisted in a Bridge-owned local store (`~/.codex-kimi-bridge/state` by default, override with `KIMI_BRIDGE_STATE_DIR`) because real Kimi servers strip arbitrary session metadata. The store contains no tokens, uses one file per session, and survives MCP/Codex restarts.
+
 Review rules:
 
 - Do not infer "no changes" from a clean working tree alone. Inspect `committedChanges` for commits and file diffs.
