@@ -21105,8 +21105,9 @@ import { basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/baseline-store.ts
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
 
 // src/git.ts
 import { execFile } from "node:child_process";
@@ -21460,17 +21461,23 @@ var NodeGitInspector = class {
 function safeFileName(input) {
   return Buffer.from(input, "utf8").toString("base64url");
 }
+function normalizeServerUrl(input) {
+  return input.trim().toLowerCase();
+}
+function serverDirName(serverUrl) {
+  return createHash("sha256").update(normalizeServerUrl(serverUrl), "utf8").digest("hex");
+}
 var FileBaselineStore = class {
   serverDir;
   constructor(options) {
-    this.serverDir = join(options.stateDir, safeFileName(options.serverUrl));
+    this.serverDir = join(options.stateDir, serverDirName(options.serverUrl));
   }
   filePath(sessionId) {
     return join(this.serverDir, `${safeFileName(sessionId)}.json`);
   }
   async save(sessionId, baseline) {
     const file = this.filePath(sessionId);
-    const tempFile = `${file}.tmp`;
+    const tempFile = `${file}.${randomUUID()}.tmp`;
     await mkdir(this.serverDir, { recursive: true });
     const payload = {
       schema_version: baseline.schemaVersion,
@@ -21486,8 +21493,16 @@ var FileBaselineStore = class {
         head_commit: wt.headCommit
       }));
     }
-    await writeFile(tempFile, JSON.stringify(payload), "utf8");
-    await rename(tempFile, file);
+    try {
+      await writeFile(tempFile, JSON.stringify(payload), "utf8");
+      await rename(tempFile, file);
+    } catch (err) {
+      try {
+        await rm(tempFile, { force: true });
+      } catch {
+      }
+      throw err;
+    }
   }
   async load(sessionId) {
     let raw;
@@ -21513,7 +21528,9 @@ var FileBaselineStore = class {
       const wt = item;
       const wtPath = typeof wt.path === "string" ? wt.path : void 0;
       const headCommit = typeof wt.head_commit === "string" ? wt.head_commit : void 0;
-      if (!wtPath || !headCommit) return void 0;
+      if (!wtPath || wtPath.length === 0 || !headCommit || !OBJECT_ID_RE.test(headCommit)) {
+        return void 0;
+      }
       return { path: wtPath, headCommit };
     }).filter((wt) => wt !== void 0) : void 0;
     return {
@@ -21542,7 +21559,7 @@ function createDefaultBaselineStore(config2) {
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join as join2 } from "node:path";
-function normalizeServerUrl(raw) {
+function normalizeServerUrl2(raw) {
   const url = new URL(raw);
   url.pathname = url.pathname.replace(/\/api\/v1\/?$/, "").replace(/\/$/, "");
   url.search = "";
@@ -21583,7 +21600,7 @@ function loadBridgeConfig(env = process.env) {
   const kimiCodeHome = env.KIMI_CODE_HOME && env.KIMI_CODE_HOME.trim().length > 0 ? env.KIMI_CODE_HOME.trim() : void 0;
   const { token, source } = resolveServerToken(env.KIMI_SERVER_TOKEN, kimiCodeHome);
   return {
-    serverUrl: normalizeServerUrl(env.KIMI_SERVER_URL ?? "http://127.0.0.1:58627"),
+    serverUrl: normalizeServerUrl2(env.KIMI_SERVER_URL ?? "http://127.0.0.1:58627"),
     defaultModel: env.KIMI_MODEL && env.KIMI_MODEL.trim().length > 0 ? env.KIMI_MODEL : void 0,
     defaultThinking: env.KIMI_THINKING && env.KIMI_THINKING.trim().length > 0 ? env.KIMI_THINKING : "high",
     defaultPermissionMode,
@@ -22322,13 +22339,18 @@ function createToolHandlers(deps) {
     };
   }
   async function buildDelegateAndWaitResult(delegated, wait) {
+    const baselineFields = {
+      ...delegated.baselineStored !== void 0 ? { baselineStored: delegated.baselineStored } : {},
+      ...delegated.baselineStoreError !== void 0 ? { baselineStoreError: delegated.baselineStoreError } : {}
+    };
     if (wait.status !== "idle") {
       const result = {
         sessionId: delegated.sessionId,
         promptId: delegated.promptId,
         submitStatus: delegated.status,
         webUrl: delegated.webUrl,
-        wait
+        wait,
+        ...baselineFields
       };
       if (wait.status === "timeout" || wait.status === "aborted" || wait.status === "failed") {
         result.diagnostics = await buildDelegateAndWaitDiagnostics(
@@ -22351,7 +22373,8 @@ function createToolHandlers(deps) {
       wait,
       handoff,
       changedFiles: handoff.changedFiles,
-      reviewPackage
+      reviewPackage,
+      ...baselineFields
     };
   }
   const handlers = {
