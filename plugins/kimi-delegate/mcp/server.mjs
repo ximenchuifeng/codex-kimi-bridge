@@ -21104,10 +21104,444 @@ var StdioServerTransport = class {
 import { basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// src/baseline-store.ts
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+
+// src/git.ts
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import path from "node:path";
+var execFileAsync = promisify(execFile);
+var OBJECT_ID_RE = /^[0-9a-fA-F]{40}$|^[0-9a-fA-F]{64}$/;
+function isBufferOutput(output) {
+  return Buffer.isBuffer(output);
+}
+function parseNulStatus(buffer) {
+  const text = buffer.toString("utf8");
+  const parts = text.split("\0").filter(Boolean);
+  const entries = [];
+  let i = 0;
+  while (i < parts.length) {
+    const entry = parts[i];
+    if (entry.length < 3 || entry[2] !== " ") {
+      i += 1;
+      continue;
+    }
+    const status = entry.slice(0, 2);
+    const path3 = entry.slice(3);
+    if (status[0] === "R" || status[0] === "C" || status[1] === "R" || status[1] === "C") {
+      entries.push({ status, path: path3 });
+      i += 2;
+      continue;
+    }
+    entries.push({ status, path: path3 });
+    i += 1;
+  }
+  return entries;
+}
+function parseWorktreeList(buffer) {
+  const text = buffer.toString("utf8");
+  const records = text.split("\0\0").filter((record2) => record2.length > 0);
+  const worktrees = [];
+  for (const record2 of records) {
+    let worktreePath;
+    let headCommit;
+    for (const line of record2.split("\0")) {
+      if (line.startsWith("worktree ")) {
+        worktreePath = line.slice("worktree ".length);
+      } else if (line.startsWith("HEAD ")) {
+        headCommit = line.slice("HEAD ".length);
+      }
+    }
+    if (worktreePath && headCommit && OBJECT_ID_RE.test(headCommit)) {
+      worktrees.push({ path: worktreePath, headCommit });
+    }
+  }
+  return worktrees;
+}
+var NodeGitInspector = class {
+  timeoutMs;
+  maxOutputBytes;
+  constructor(options) {
+    this.timeoutMs = options?.timeoutMs ?? 3e4;
+    this.maxOutputBytes = options?.maxOutputBytes ?? 10 * 1024 * 1024;
+  }
+  get metadataMaxBuffer() {
+    return Math.max(this.maxOutputBytes, 1048576);
+  }
+  normalizeWorktreePath(p) {
+    const normalized = path.normalize(p);
+    return normalized.endsWith("/") && normalized.length > 1 ? normalized.slice(0, -1) : normalized;
+  }
+  async git(cwd, args, maxBuffer) {
+    const result = await execFileAsync("git", ["-C", cwd, ...args], {
+      timeout: this.timeoutMs,
+      maxBuffer: maxBuffer ?? this.maxOutputBytes,
+      encoding: "buffer"
+    });
+    if (!isBufferOutput(result.stdout)) {
+      throw new Error("Unexpected non-buffer output from git command");
+    }
+    return result.stdout;
+  }
+  async tryGit(cwd, args, maxBuffer) {
+    try {
+      const stdout = await this.git(cwd, args, maxBuffer);
+      return { ok: true, stdout };
+    } catch (err) {
+      const execErr = err;
+      return { ok: false, code: execErr?.code };
+    }
+  }
+  async captureBaseline(cwd) {
+    const repoCheck = await this.tryGit(cwd, ["rev-parse", "--git-dir"], this.metadataMaxBuffer);
+    if (!repoCheck.ok) {
+      return { available: false, unavailableReason: "not_a_git_repository" };
+    }
+    const headResult = await this.tryGit(cwd, ["rev-parse", "HEAD"], this.metadataMaxBuffer);
+    if (!headResult.ok) {
+      return { available: false, unavailableReason: "head_unavailable" };
+    }
+    const baseCommit = headResult.stdout.toString("utf8").trim();
+    if (!OBJECT_ID_RE.test(baseCommit)) {
+      return { available: false, unavailableReason: "git_command_failed" };
+    }
+    const branchResult = await this.tryGit(cwd, ["rev-parse", "--abbrev-ref", "HEAD"], this.metadataMaxBuffer);
+    const baseBranch = branchResult.ok ? branchResult.stdout.toString("utf8").trim() : void 0;
+    const initialDirtyPaths = [];
+    const statusResult = await this.tryGit(cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=all"], this.metadataMaxBuffer);
+    if (statusResult.ok) {
+      for (const entry of parseNulStatus(statusResult.stdout)) {
+        initialDirtyPaths.push(entry.path);
+      }
+    }
+    let worktrees;
+    const worktreeResult = await this.tryGit(cwd, ["worktree", "list", "--porcelain", "-z"], this.metadataMaxBuffer);
+    if (worktreeResult.ok) {
+      worktrees = parseWorktreeList(worktreeResult.stdout);
+    }
+    return {
+      available: true,
+      baseline: {
+        schemaVersion: 1,
+        baseCommit,
+        baseBranch,
+        initialDirtyPaths: initialDirtyPaths.sort(),
+        worktrees
+      }
+    };
+  }
+  async resolveReviewWorkspace(sessionCwd, baseline) {
+    if (!baseline.worktrees || baseline.worktrees.length === 0) {
+      return { kind: "fallback", path: sessionCwd };
+    }
+    const listResult = await this.tryGit(sessionCwd, ["worktree", "list", "--porcelain", "-z"], this.metadataMaxBuffer);
+    if (!listResult.ok) {
+      return { kind: "fallback", path: sessionCwd };
+    }
+    const currentWorktrees = parseWorktreeList(listResult.stdout);
+    const baselineByPath = new Map(
+      baseline.worktrees.map((wt) => [this.normalizeWorktreePath(wt.path), wt])
+    );
+    const candidates = [];
+    for (const current of currentWorktrees) {
+      const normalizedPath = this.normalizeWorktreePath(current.path);
+      const baselineEntry = baselineByPath.get(normalizedPath);
+      if (baselineEntry) {
+        if (baselineEntry.headCommit === baseline.baseCommit && current.headCommit !== baseline.baseCommit) {
+          candidates.push({ path: current.path, headCommit: current.headCommit, baselineHeadCommit: baselineEntry.headCommit });
+        }
+      } else {
+        if (current.headCommit !== baseline.baseCommit) {
+          candidates.push({ path: current.path, headCommit: current.headCommit, baselineHeadCommit: null });
+        }
+      }
+    }
+    if (candidates.length === 1) {
+      return { kind: "selected", path: candidates[0].path };
+    }
+    if (candidates.length === 0) {
+      return { kind: "fallback", path: sessionCwd };
+    }
+    return {
+      kind: "unavailable",
+      reason: "ambiguous_worktrees",
+      diagnostics: { candidates }
+    };
+  }
+  async collectCommittedChanges(cwd, baseline) {
+    if (!baseline || baseline.schemaVersion !== 1) {
+      return {
+        baseCommit: void 0,
+        headCommit: void 0,
+        commits: [],
+        changeSet: this.unavailableChangeSet("baseline_unavailable")
+      };
+    }
+    if (!OBJECT_ID_RE.test(baseline.baseCommit)) {
+      return {
+        baseCommit: baseline.baseCommit,
+        headCommit: void 0,
+        commits: [],
+        changeSet: this.unavailableChangeSet("git_command_failed")
+      };
+    }
+    const resolution = await this.resolveReviewWorkspace(cwd, baseline);
+    if (resolution.kind === "unavailable") {
+      return {
+        baseCommit: baseline.baseCommit,
+        headCommit: void 0,
+        commits: [],
+        changeSet: this.unavailableChangeSet(resolution.reason),
+        diagnostics: resolution.diagnostics
+      };
+    }
+    const inspectCwd = resolution.path;
+    const repoCheck = await this.tryGit(inspectCwd, ["rev-parse", "--git-dir"], this.metadataMaxBuffer);
+    if (!repoCheck.ok) {
+      return {
+        baseCommit: baseline.baseCommit,
+        headCommit: void 0,
+        commits: [],
+        changeSet: this.unavailableChangeSet("not_a_git_repository")
+      };
+    }
+    const headResult = await this.tryGit(inspectCwd, ["rev-parse", "HEAD"], this.metadataMaxBuffer);
+    if (!headResult.ok) {
+      return {
+        baseCommit: baseline.baseCommit,
+        headCommit: void 0,
+        commits: [],
+        changeSet: this.unavailableChangeSet("head_unavailable")
+      };
+    }
+    const headCommit = headResult.stdout.toString("utf8").trim();
+    if (!OBJECT_ID_RE.test(headCommit)) {
+      return {
+        baseCommit: baseline.baseCommit,
+        headCommit: void 0,
+        commits: [],
+        changeSet: this.unavailableChangeSet("git_command_failed")
+      };
+    }
+    const ancestorResult = await this.tryGit(
+      inspectCwd,
+      ["merge-base", "--is-ancestor", baseline.baseCommit, "HEAD"],
+      this.metadataMaxBuffer
+    );
+    if (!ancestorResult.ok) {
+      if (ancestorResult.code === 1) {
+        return {
+          baseCommit: baseline.baseCommit,
+          headCommit,
+          commits: [],
+          changeSet: this.unavailableChangeSet("base_not_ancestor")
+        };
+      }
+      return {
+        baseCommit: baseline.baseCommit,
+        headCommit,
+        commits: [],
+        changeSet: this.unavailableChangeSet("git_command_failed")
+      };
+    }
+    try {
+      const commits = await this.listCommits(inspectCwd, baseline.baseCommit, headCommit);
+      const { changedFiles, additions, deletions } = await this.collectStats(inspectCwd, baseline.baseCommit, headCommit);
+      const { diffs, truncatedPaths } = await this.collectPatches(inspectCwd, baseline.baseCommit, headCommit);
+      return {
+        baseCommit: baseline.baseCommit,
+        headCommit,
+        reviewWorkspace: resolution.kind === "selected" ? inspectCwd : void 0,
+        commits,
+        changeSet: {
+          available: true,
+          changedFiles,
+          additions,
+          deletions,
+          diffs,
+          truncatedPaths
+        }
+      };
+    } catch (err) {
+      return {
+        baseCommit: baseline.baseCommit,
+        headCommit,
+        commits: [],
+        changeSet: this.unavailableChangeSet("git_command_failed")
+      };
+    }
+  }
+  unavailableChangeSet(reason) {
+    return {
+      available: false,
+      changedFiles: [],
+      additions: 0,
+      deletions: 0,
+      diffs: [],
+      truncatedPaths: [],
+      unavailableReason: reason
+    };
+  }
+  async listCommits(cwd, base, head) {
+    const stdout = await this.git(
+      cwd,
+      ["log", `${base}..${head}`, "--format=%H%x00%s", "--no-merges", "-z"],
+      this.metadataMaxBuffer
+    );
+    const raw = stdout.toString("utf8");
+    const items = raw.split("\0").filter(Boolean);
+    const commits = [];
+    for (let i = 0; i < items.length; i += 2) {
+      const sha = items[i];
+      const subject = items[i + 1] ?? "";
+      commits.push({ sha, shortSha: sha.slice(0, 7), subject });
+    }
+    return commits;
+  }
+  async collectStats(cwd, base, head) {
+    const stdout = await this.git(cwd, ["diff", `${base}..${head}`, "--numstat", "-z"], this.metadataMaxBuffer);
+    const parts = stdout.toString("utf8").split("\0");
+    let additions = 0;
+    let deletions = 0;
+    const changedFiles = [];
+    let i = 0;
+    while (i < parts.length - 1) {
+      const segment = parts[i];
+      const fields = segment.split("	");
+      if (fields.length !== 3) {
+        i += 1;
+        continue;
+      }
+      const [addField, delField, path3] = fields;
+      if (path3) {
+        if (addField === "-" && delField === "-") {
+        } else {
+          additions += parseInt(addField, 10);
+          deletions += parseInt(delField, 10);
+        }
+        changedFiles.push(path3);
+        i += 1;
+        continue;
+      }
+      const oldPath = parts[i + 1];
+      const newPath = parts[i + 2];
+      if (newPath) {
+        if (addField === "-" && delField === "-") {
+        } else {
+          additions += parseInt(addField, 10);
+          deletions += parseInt(delField, 10);
+        }
+        changedFiles.push(newPath);
+      }
+      i += 3;
+    }
+    return { changedFiles: changedFiles.sort(), additions, deletions };
+  }
+  async collectPatches(cwd, base, head) {
+    const nameResult = await this.git(cwd, ["diff", `${base}..${head}`, "--name-only", "-z"], this.metadataMaxBuffer);
+    const paths = nameResult.toString("utf8").split("\0").filter(Boolean);
+    const diffs = [];
+    const truncatedPaths = [];
+    for (const path3 of paths) {
+      try {
+        const patch = await this.git(cwd, ["diff", `${base}..${head}`, "--", path3]);
+        diffs.push({ path: path3, diff: patch.toString("utf8"), source: "committed" });
+      } catch {
+        truncatedPaths.push(path3);
+      }
+    }
+    return { diffs, truncatedPaths };
+  }
+};
+
+// src/baseline-store.ts
+function safeFileName(input) {
+  return Buffer.from(input, "utf8").toString("base64url");
+}
+var FileBaselineStore = class {
+  serverDir;
+  constructor(options) {
+    this.serverDir = join(options.stateDir, safeFileName(options.serverUrl));
+  }
+  filePath(sessionId) {
+    return join(this.serverDir, `${safeFileName(sessionId)}.json`);
+  }
+  async save(sessionId, baseline) {
+    const file = this.filePath(sessionId);
+    const tempFile = `${file}.tmp`;
+    await mkdir(this.serverDir, { recursive: true });
+    const payload = {
+      schema_version: baseline.schemaVersion,
+      base_commit: baseline.baseCommit,
+      initial_dirty_paths: baseline.initialDirtyPaths
+    };
+    if (baseline.baseBranch) {
+      payload.base_branch = baseline.baseBranch;
+    }
+    if (baseline.worktrees) {
+      payload.worktrees = baseline.worktrees.map((wt) => ({
+        path: wt.path,
+        head_commit: wt.headCommit
+      }));
+    }
+    await writeFile(tempFile, JSON.stringify(payload), "utf8");
+    await rename(tempFile, file);
+  }
+  async load(sessionId) {
+    let raw;
+    try {
+      raw = await readFile(this.filePath(sessionId), "utf8");
+    } catch {
+      return void 0;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return void 0;
+    }
+    if (parsed.schema_version !== 1) return void 0;
+    const baseCommit = typeof parsed.base_commit === "string" ? parsed.base_commit : void 0;
+    if (!baseCommit || !OBJECT_ID_RE.test(baseCommit)) return void 0;
+    const baseBranch = typeof parsed.base_branch === "string" ? parsed.base_branch : void 0;
+    const initialDirtyPaths = Array.isArray(parsed.initial_dirty_paths) ? parsed.initial_dirty_paths.filter((p) => typeof p === "string") : [];
+    const worktreesRaw = parsed.worktrees;
+    const worktrees = Array.isArray(worktreesRaw) ? worktreesRaw.map((item) => {
+      if (!item || typeof item !== "object") return void 0;
+      const wt = item;
+      const wtPath = typeof wt.path === "string" ? wt.path : void 0;
+      const headCommit = typeof wt.head_commit === "string" ? wt.head_commit : void 0;
+      if (!wtPath || !headCommit) return void 0;
+      return { path: wtPath, headCommit };
+    }).filter((wt) => wt !== void 0) : void 0;
+    return {
+      schemaVersion: 1,
+      baseCommit,
+      baseBranch,
+      initialDirtyPaths,
+      worktrees
+    };
+  }
+};
+var InMemoryBaselineStore = class {
+  data = /* @__PURE__ */ new Map();
+  async save(sessionId, baseline) {
+    this.data.set(sessionId, baseline);
+  }
+  async load(sessionId) {
+    return this.data.get(sessionId);
+  }
+};
+function createDefaultBaselineStore(config2) {
+  return new FileBaselineStore({ stateDir: config2.stateDir, serverUrl: config2.serverUrl });
+}
+
 // src/config.ts
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join as join2 } from "node:path";
 function normalizeServerUrl(raw) {
   const url = new URL(raw);
   url.pathname = url.pathname.replace(/\/api\/v1\/?$/, "").replace(/\/$/, "");
@@ -21131,8 +21565,8 @@ function resolveServerToken(envToken, kimiCodeHome, homeDir = homedir()) {
     return { token: trimmedEnv, source: "env" };
   }
   const candidates = [
-    ...kimiCodeHome ? [{ path: join(kimiCodeHome, "server.token"), source: "kimi_code_home" }] : [],
-    { path: join(homeDir, ".kimi-code", "server.token"), source: "home" }
+    ...kimiCodeHome ? [{ path: join2(kimiCodeHome, "server.token"), source: "kimi_code_home" }] : [],
+    { path: join2(homeDir, ".kimi-code", "server.token"), source: "home" }
   ];
   for (const candidate of candidates) {
     try {
@@ -21160,7 +21594,8 @@ function loadBridgeConfig(env = process.env) {
     autoStart: !(env.KIMI_AUTO_START === "false" || env.KIMI_AUTO_START === "0"),
     kimiCommand: env.KIMI_COMMAND && env.KIMI_COMMAND.trim().length > 0 ? env.KIMI_COMMAND.trim() : "kimi",
     preflightCacheMs: parsePreflightCacheMs(env.KIMI_PREFLIGHT_CACHE_MS),
-    kimiCodeHome
+    kimiCodeHome,
+    stateDir: env.KIMI_BRIDGE_STATE_DIR && env.KIMI_BRIDGE_STATE_DIR.trim().length > 0 ? env.KIMI_BRIDGE_STATE_DIR.trim() : join2(homedir(), ".codex-kimi-bridge", "state")
   };
 }
 
@@ -21573,358 +22008,8 @@ async function expandGitStatusEntries(input) {
 }
 
 // src/tools.ts
-import { readdir } from "node:fs/promises";
+import { readdir, realpath } from "node:fs/promises";
 import path2 from "node:path";
-
-// src/git.ts
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import path from "node:path";
-var execFileAsync = promisify(execFile);
-var OBJECT_ID_RE = /^[0-9a-fA-F]{40}$|^[0-9a-fA-F]{64}$/;
-function isBufferOutput(output) {
-  return Buffer.isBuffer(output);
-}
-function parseNulStatus(buffer) {
-  const text = buffer.toString("utf8");
-  const parts = text.split("\0").filter(Boolean);
-  const entries = [];
-  let i = 0;
-  while (i < parts.length) {
-    const entry = parts[i];
-    if (entry.length < 3 || entry[2] !== " ") {
-      i += 1;
-      continue;
-    }
-    const status = entry.slice(0, 2);
-    const path3 = entry.slice(3);
-    if (status[0] === "R" || status[0] === "C" || status[1] === "R" || status[1] === "C") {
-      entries.push({ status, path: path3 });
-      i += 2;
-      continue;
-    }
-    entries.push({ status, path: path3 });
-    i += 1;
-  }
-  return entries;
-}
-function parseWorktreeList(buffer) {
-  const text = buffer.toString("utf8");
-  const records = text.split("\0\0").filter((record2) => record2.length > 0);
-  const worktrees = [];
-  for (const record2 of records) {
-    let worktreePath;
-    let headCommit;
-    for (const line of record2.split("\0")) {
-      if (line.startsWith("worktree ")) {
-        worktreePath = line.slice("worktree ".length);
-      } else if (line.startsWith("HEAD ")) {
-        headCommit = line.slice("HEAD ".length);
-      }
-    }
-    if (worktreePath && headCommit && OBJECT_ID_RE.test(headCommit)) {
-      worktrees.push({ path: worktreePath, headCommit });
-    }
-  }
-  return worktrees;
-}
-var NodeGitInspector = class {
-  timeoutMs;
-  maxOutputBytes;
-  constructor(options) {
-    this.timeoutMs = options?.timeoutMs ?? 3e4;
-    this.maxOutputBytes = options?.maxOutputBytes ?? 10 * 1024 * 1024;
-  }
-  get metadataMaxBuffer() {
-    return Math.max(this.maxOutputBytes, 1048576);
-  }
-  normalizeWorktreePath(p) {
-    const normalized = path.normalize(p);
-    return normalized.endsWith("/") && normalized.length > 1 ? normalized.slice(0, -1) : normalized;
-  }
-  async git(cwd, args, maxBuffer) {
-    const result = await execFileAsync("git", ["-C", cwd, ...args], {
-      timeout: this.timeoutMs,
-      maxBuffer: maxBuffer ?? this.maxOutputBytes,
-      encoding: "buffer"
-    });
-    if (!isBufferOutput(result.stdout)) {
-      throw new Error("Unexpected non-buffer output from git command");
-    }
-    return result.stdout;
-  }
-  async tryGit(cwd, args, maxBuffer) {
-    try {
-      const stdout = await this.git(cwd, args, maxBuffer);
-      return { ok: true, stdout };
-    } catch (err) {
-      const execErr = err;
-      return { ok: false, code: execErr?.code };
-    }
-  }
-  async captureBaseline(cwd) {
-    const repoCheck = await this.tryGit(cwd, ["rev-parse", "--git-dir"], this.metadataMaxBuffer);
-    if (!repoCheck.ok) {
-      return { available: false, unavailableReason: "not_a_git_repository" };
-    }
-    const headResult = await this.tryGit(cwd, ["rev-parse", "HEAD"], this.metadataMaxBuffer);
-    if (!headResult.ok) {
-      return { available: false, unavailableReason: "head_unavailable" };
-    }
-    const baseCommit = headResult.stdout.toString("utf8").trim();
-    if (!OBJECT_ID_RE.test(baseCommit)) {
-      return { available: false, unavailableReason: "git_command_failed" };
-    }
-    const branchResult = await this.tryGit(cwd, ["rev-parse", "--abbrev-ref", "HEAD"], this.metadataMaxBuffer);
-    const baseBranch = branchResult.ok ? branchResult.stdout.toString("utf8").trim() : void 0;
-    const initialDirtyPaths = [];
-    const statusResult = await this.tryGit(cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=all"], this.metadataMaxBuffer);
-    if (statusResult.ok) {
-      for (const entry of parseNulStatus(statusResult.stdout)) {
-        initialDirtyPaths.push(entry.path);
-      }
-    }
-    let worktrees;
-    const worktreeResult = await this.tryGit(cwd, ["worktree", "list", "--porcelain", "-z"], this.metadataMaxBuffer);
-    if (worktreeResult.ok) {
-      worktrees = parseWorktreeList(worktreeResult.stdout);
-    }
-    return {
-      available: true,
-      baseline: {
-        schemaVersion: 1,
-        baseCommit,
-        baseBranch,
-        initialDirtyPaths: initialDirtyPaths.sort(),
-        worktrees
-      }
-    };
-  }
-  async resolveReviewWorkspace(sessionCwd, baseline) {
-    if (!baseline.worktrees || baseline.worktrees.length === 0) {
-      return { kind: "fallback", path: sessionCwd };
-    }
-    const listResult = await this.tryGit(sessionCwd, ["worktree", "list", "--porcelain", "-z"], this.metadataMaxBuffer);
-    if (!listResult.ok) {
-      return { kind: "fallback", path: sessionCwd };
-    }
-    const currentWorktrees = parseWorktreeList(listResult.stdout);
-    const baselineByPath = new Map(
-      baseline.worktrees.map((wt) => [this.normalizeWorktreePath(wt.path), wt])
-    );
-    const candidates = [];
-    for (const current of currentWorktrees) {
-      const normalizedPath = this.normalizeWorktreePath(current.path);
-      const baselineEntry = baselineByPath.get(normalizedPath);
-      if (baselineEntry) {
-        if (baselineEntry.headCommit === baseline.baseCommit && current.headCommit !== baseline.baseCommit) {
-          candidates.push({ path: current.path, headCommit: current.headCommit, baselineHeadCommit: baselineEntry.headCommit });
-        }
-      } else {
-        if (current.headCommit !== baseline.baseCommit) {
-          candidates.push({ path: current.path, headCommit: current.headCommit, baselineHeadCommit: null });
-        }
-      }
-    }
-    if (candidates.length === 1) {
-      return { kind: "selected", path: candidates[0].path };
-    }
-    if (candidates.length === 0) {
-      return { kind: "fallback", path: sessionCwd };
-    }
-    return {
-      kind: "unavailable",
-      reason: "ambiguous_worktrees",
-      diagnostics: { candidates }
-    };
-  }
-  async collectCommittedChanges(cwd, baseline) {
-    if (!baseline || baseline.schemaVersion !== 1) {
-      return {
-        baseCommit: void 0,
-        headCommit: void 0,
-        commits: [],
-        changeSet: this.unavailableChangeSet("baseline_unavailable")
-      };
-    }
-    if (!OBJECT_ID_RE.test(baseline.baseCommit)) {
-      return {
-        baseCommit: baseline.baseCommit,
-        headCommit: void 0,
-        commits: [],
-        changeSet: this.unavailableChangeSet("git_command_failed")
-      };
-    }
-    const resolution = await this.resolveReviewWorkspace(cwd, baseline);
-    if (resolution.kind === "unavailable") {
-      return {
-        baseCommit: baseline.baseCommit,
-        headCommit: void 0,
-        commits: [],
-        changeSet: this.unavailableChangeSet(resolution.reason),
-        diagnostics: resolution.diagnostics
-      };
-    }
-    const inspectCwd = resolution.path;
-    const repoCheck = await this.tryGit(inspectCwd, ["rev-parse", "--git-dir"], this.metadataMaxBuffer);
-    if (!repoCheck.ok) {
-      return {
-        baseCommit: baseline.baseCommit,
-        headCommit: void 0,
-        commits: [],
-        changeSet: this.unavailableChangeSet("not_a_git_repository")
-      };
-    }
-    const headResult = await this.tryGit(inspectCwd, ["rev-parse", "HEAD"], this.metadataMaxBuffer);
-    if (!headResult.ok) {
-      return {
-        baseCommit: baseline.baseCommit,
-        headCommit: void 0,
-        commits: [],
-        changeSet: this.unavailableChangeSet("head_unavailable")
-      };
-    }
-    const headCommit = headResult.stdout.toString("utf8").trim();
-    if (!OBJECT_ID_RE.test(headCommit)) {
-      return {
-        baseCommit: baseline.baseCommit,
-        headCommit: void 0,
-        commits: [],
-        changeSet: this.unavailableChangeSet("git_command_failed")
-      };
-    }
-    const ancestorResult = await this.tryGit(
-      inspectCwd,
-      ["merge-base", "--is-ancestor", baseline.baseCommit, "HEAD"],
-      this.metadataMaxBuffer
-    );
-    if (!ancestorResult.ok) {
-      if (ancestorResult.code === 1) {
-        return {
-          baseCommit: baseline.baseCommit,
-          headCommit,
-          commits: [],
-          changeSet: this.unavailableChangeSet("base_not_ancestor")
-        };
-      }
-      return {
-        baseCommit: baseline.baseCommit,
-        headCommit,
-        commits: [],
-        changeSet: this.unavailableChangeSet("git_command_failed")
-      };
-    }
-    try {
-      const commits = await this.listCommits(inspectCwd, baseline.baseCommit, headCommit);
-      const { changedFiles, additions, deletions } = await this.collectStats(inspectCwd, baseline.baseCommit, headCommit);
-      const { diffs, truncatedPaths } = await this.collectPatches(inspectCwd, baseline.baseCommit, headCommit);
-      return {
-        baseCommit: baseline.baseCommit,
-        headCommit,
-        reviewWorkspace: resolution.kind === "selected" ? inspectCwd : void 0,
-        commits,
-        changeSet: {
-          available: true,
-          changedFiles,
-          additions,
-          deletions,
-          diffs,
-          truncatedPaths
-        }
-      };
-    } catch (err) {
-      return {
-        baseCommit: baseline.baseCommit,
-        headCommit,
-        commits: [],
-        changeSet: this.unavailableChangeSet("git_command_failed")
-      };
-    }
-  }
-  unavailableChangeSet(reason) {
-    return {
-      available: false,
-      changedFiles: [],
-      additions: 0,
-      deletions: 0,
-      diffs: [],
-      truncatedPaths: [],
-      unavailableReason: reason
-    };
-  }
-  async listCommits(cwd, base, head) {
-    const stdout = await this.git(
-      cwd,
-      ["log", `${base}..${head}`, "--format=%H%x00%s", "--no-merges", "-z"],
-      this.metadataMaxBuffer
-    );
-    const raw = stdout.toString("utf8");
-    const items = raw.split("\0").filter(Boolean);
-    const commits = [];
-    for (let i = 0; i < items.length; i += 2) {
-      const sha = items[i];
-      const subject = items[i + 1] ?? "";
-      commits.push({ sha, shortSha: sha.slice(0, 7), subject });
-    }
-    return commits;
-  }
-  async collectStats(cwd, base, head) {
-    const stdout = await this.git(cwd, ["diff", `${base}..${head}`, "--numstat", "-z"], this.metadataMaxBuffer);
-    const parts = stdout.toString("utf8").split("\0");
-    let additions = 0;
-    let deletions = 0;
-    const changedFiles = [];
-    let i = 0;
-    while (i < parts.length - 1) {
-      const segment = parts[i];
-      const fields = segment.split("	");
-      if (fields.length !== 3) {
-        i += 1;
-        continue;
-      }
-      const [addField, delField, path3] = fields;
-      if (path3) {
-        if (addField === "-" && delField === "-") {
-        } else {
-          additions += parseInt(addField, 10);
-          deletions += parseInt(delField, 10);
-        }
-        changedFiles.push(path3);
-        i += 1;
-        continue;
-      }
-      const oldPath = parts[i + 1];
-      const newPath = parts[i + 2];
-      if (newPath) {
-        if (addField === "-" && delField === "-") {
-        } else {
-          additions += parseInt(addField, 10);
-          deletions += parseInt(delField, 10);
-        }
-        changedFiles.push(newPath);
-      }
-      i += 3;
-    }
-    return { changedFiles: changedFiles.sort(), additions, deletions };
-  }
-  async collectPatches(cwd, base, head) {
-    const nameResult = await this.git(cwd, ["diff", `${base}..${head}`, "--name-only", "-z"], this.metadataMaxBuffer);
-    const paths = nameResult.toString("utf8").split("\0").filter(Boolean);
-    const diffs = [];
-    const truncatedPaths = [];
-    for (const path3 of paths) {
-      try {
-        const patch = await this.git(cwd, ["diff", `${base}..${head}`, "--", path3]);
-        diffs.push({ path: path3, diff: patch.toString("utf8"), source: "committed" });
-      } catch {
-        truncatedPaths.push(path3);
-      }
-    }
-    return { diffs, truncatedPaths };
-  }
-};
-
-// src/tools.ts
 function withPreflight(preflight, fn) {
   return async (...args) => {
     await preflight.ensureReady();
@@ -22196,6 +22281,7 @@ var defaultFileLister = {
 };
 function createToolHandlers(deps) {
   const gitInspector = deps.gitInspector ?? new NodeGitInspector();
+  const baselineStore = deps.baselineStore ?? new InMemoryBaselineStore();
   function buildReviewPackage(sessionId, handoff) {
     const diffsWithContent = handoff.diffs.filter((d) => d.diff.length > 0).length;
     const committed = handoff.committedChanges;
@@ -22302,6 +22388,9 @@ function createToolHandlers(deps) {
     },
     async kimi_delegate_task(input) {
       let session;
+      let baselineToStore;
+      let baselineStored;
+      let baselineStoreError;
       if (input.sessionId) {
         session = { id: input.sessionId };
       } else {
@@ -22310,10 +22399,21 @@ function createToolHandlers(deps) {
           const baselineResult = await gitInspector.captureBaseline(input.cwd);
           if (baselineResult.available) {
             metadata = baselineMetadata(baselineResult.baseline);
+            baselineToStore = baselineResult.baseline;
           }
         } catch {
         }
         session = await deps.kimi.createSession({ cwd: input.cwd, title: input.task.slice(0, 80), metadata });
+        if (baselineToStore) {
+          try {
+            await baselineStore.save(session.id, baselineToStore);
+            baselineStored = true;
+          } catch (err) {
+            baselineStored = false;
+            const rawError = err instanceof Error ? err.message : String(err);
+            baselineStoreError = sanitizeDiagnosticText(rawError, deps.config.serverToken);
+          }
+        }
       }
       const prompt = buildDelegationPrompt({
         task: input.task,
@@ -22329,7 +22429,14 @@ function createToolHandlers(deps) {
         planMode: false,
         swarmMode: input.swarmMode
       });
-      return { sessionId: session.id, promptId: result.prompt_id, status: result.status, webUrl: buildWebUrl(deps.config.serverUrl, session.id) };
+      return {
+        sessionId: session.id,
+        promptId: result.prompt_id,
+        status: result.status,
+        webUrl: buildWebUrl(deps.config.serverUrl, session.id),
+        ...baselineStored !== void 0 ? { baselineStored } : {},
+        ...baselineStoreError !== void 0 ? { baselineStoreError } : {}
+      };
     },
     async kimi_delegate_and_wait(input) {
       const supportedDedupeReuseStatuses = ["running", "idle", "awaiting_approval", "awaiting_question"];
@@ -22471,13 +22578,14 @@ function createToolHandlers(deps) {
       const workingTreeDiffs = await Promise.all(
         workingTreeFiles.map((path3) => deps.kimi.getFileDiff(input.sessionId, path3))
       );
-      const baseline = parseBaselineMetadata(session.metadata);
+      const storedBaseline = await baselineStore.load(input.sessionId);
+      const baseline = storedBaseline ?? parseBaselineMetadata(session.metadata);
       let committedResult;
       try {
         committedResult = await gitInspector.collectCommittedChanges(session.metadata.cwd, baseline);
       } catch {
       }
-      const sessionCwd = session.metadata.cwd;
+      const sessionCwd = await realpath(session.metadata.cwd).catch(() => session.metadata.cwd);
       const reviewWorkspace = committedResult?.reviewWorkspace;
       const workingTreeChanges = reviewWorkspace && reviewWorkspace !== sessionCwd ? {
         available: false,
@@ -22565,7 +22673,7 @@ function createToolHandlers(deps) {
 // src/preflight.ts
 import { spawn as defaultSpawn } from "node:child_process";
 import { homedir as homedir2 } from "node:os";
-import { join as join2 } from "node:path";
+import { join as join3 } from "node:path";
 var DEFAULT_STARTUP_TIMEOUT_MS = 3e4;
 var DEFAULT_POLL_INTERVAL_MS = 500;
 function shellQuote(arg) {
@@ -22727,14 +22835,14 @@ var KimiPreflight = class {
     }
     const check2 = (path3) => `test -f ${shellQuote(path3)} && echo "token file exists" || echo "token file missing"`;
     if (serverTokenSource === "kimi_code_home" && kimiCodeHome) {
-      return [check2(join2(kimiCodeHome, "server.token"))];
+      return [check2(join3(kimiCodeHome, "server.token"))];
     }
     if (serverTokenSource === "home") {
-      return [check2(join2(homedir2(), ".kimi-code", "server.token"))];
+      return [check2(join3(homedir2(), ".kimi-code", "server.token"))];
     }
-    const commands = [check2(join2(homedir2(), ".kimi-code", "server.token"))];
+    const commands = [check2(join3(homedir2(), ".kimi-code", "server.token"))];
     if (kimiCodeHome) {
-      commands.push(check2(join2(kimiCodeHome, "server.token")));
+      commands.push(check2(join3(kimiCodeHome, "server.token")));
     }
     return commands;
   }
@@ -22882,7 +22990,8 @@ async function main() {
   const http = new KimiHttpClient(config2.serverUrl, fetch, config2.requestTimeoutMs, config2.serverToken);
   const preflight = new KimiPreflight(config2, http);
   const kimi = new KimiClient(http);
-  const handlers = createToolHandlers({ kimi, config: config2, preflight });
+  const baselineStore = createDefaultBaselineStore(config2);
+  const handlers = createToolHandlers({ kimi, config: config2, preflight, baselineStore });
   const server = new McpServer({ name: "codex-kimi-bridge", version: "0.3.0" });
   server.tool(
     "kimi_delegate_task",
