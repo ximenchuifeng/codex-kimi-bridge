@@ -54,9 +54,9 @@ Upgrading a cloned checkout only requires pulling the desired release and reinst
 
 You do not need to manually start Kimi server or copy tokens. The bridge can preflight and auto-start Kimi for you.
 
-### Option 1: Persistent Kimi server (recommended for daily use)
+### Option 1: Persistent server with older Kimi versions
 
-Install and start Kimi as a persistent service:
+If your Kimi version provides the `server` subcommand, install and start it as a persistent service:
 
 ```bash
 kimi server install
@@ -65,15 +65,46 @@ kimi server start
 
 Then use the Codex plugin normally. The bridge will discover the running server and authenticate using the token in your Kimi home.
 
-### Option 2: Let the bridge auto-start Kimi
+### Option 2: Let the bridge auto-start modern Kimi (default)
 
-Keep the default `KIMI_AUTO_START=true` in the plugin env. The bridge will run:
+Keep `KIMI_AUTO_START=true` in the plugin env. The bundled plugin configures
+`KIMI_SERVER_ARGS` as the JSON string `["web","--no-open","--port","58627"]`,
+so the first task call starts modern Kimi (tested with 2.1.1) with:
 
 ```bash
-kimi server run --keep-alive
+kimi web --no-open --port 58627
 ```
 
-when it first needs to call the Kimi server and no server is responding on `KIMI_SERVER_URL`.
+The process runs detached, without opening a browser or a Windows console.
+A healthy existing server is reused, and normal token authentication stays enabled.
+The spawned process receives the same resolved Kimi data home as token discovery.
+An empty `KIMI_CODE_HOME` therefore uses `~/.kimi-code`.
+`kimi_bridge_status` remains read-only and does not trigger startup.
+
+`KIMI_SERVER_ARGS` must be a non-empty JSON array of non-blank strings.
+Arguments go directly to the executable, without shell parsing. When this setting
+is omitted or blank, the bridge retains `server run --keep-alive` for older Kimi.
+For an older Kimi installation, set `KIMI_SERVER_ARGS` to `""` in
+`plugins/kimi-delegate/.mcp.json` before installing or reinstalling the plugin.
+Match `--port` to `KIMI_SERVER_URL` when using a custom port, and do not put
+tokens in these arguments. Set `KIMI_COMMAND` to the full executable path if
+Kimi is unavailable on the PATH inherited by Codex.
+
+For example, the relevant plugin environment settings are:
+
+```json
+{
+  "KIMI_COMMAND": "kimi",
+  "KIMI_AUTO_START": "true",
+  "KIMI_SERVER_URL": "http://127.0.0.1:58627",
+  "KIMI_SERVER_ARGS": "[\"web\",\"--no-open\",\"--port\",\"58627\"]"
+}
+```
+
+On Windows, `KIMI_COMMAND` can be an absolute path such as
+`C:\\Program Files\\Kimi Code\\kimi.exe` (escape backslashes when editing JSON).
+Startup diagnostics format executable paths and arguments for PowerShell on
+Windows and POSIX shells on other platforms.
 
 ### Token handling
 
@@ -125,12 +156,12 @@ The `kimi_bridge_status` tool always performs a live check and does not use or u
 - `status`: one of `ready`, `server_unreachable`, or `auth_failed`.
 - `nextActions`: human-readable suggestions for what to do next. The messages are localized to Chinese and guide you based on the current state:
   - `ready`: indicates you can keep delegating tasks and open `webBaseUrl` or a task's `webUrl` to view the session.
-  - `server_unreachable` with `autoStart=true`: the next task call will try to auto-start the server, or you can run `kimi server run --keep-alive` manually.
+  - `server_unreachable` with `autoStart=true`: the next task call will try to auto-start the server, or you can run the configured startup command manually.
   - `server_unreachable` with `autoStart=false`: start the server manually or set `KIMI_AUTO_START=true`.
   - `auth_failed`: check `KIMI_SERVER_TOKEN` / `KIMI_CODE_HOME`, or for local smoke testing start Kimi with `--dangerous-bypass-auth`.
 - `commands` *(optional)*: an array of safe, copyable shell commands that you can run to act on the diagnosis. Any dynamic values taken from configuration (such as `kimiCommand` or `kimiCodeHome`) are shell-quoted so the commands remain valid even when those values contain spaces or quotes. Token values are never included. The array is empty or omitted in the `ready` state. For other states it may include commands such as:
-  - `server_unreachable` + `autoStart=false`: `kimi server start`
-  - `server_unreachable` + `autoStart=true`: `kimi server run --keep-alive`
+  - `server_unreachable` + `autoStart=false`: the configured startup command (legacy fallback: `kimi server start`)
+  - `server_unreachable` + `autoStart=true`: the configured startup command (plugin default: `kimi web --no-open --port 58627`)
   - `auth_failed`: a safe check such as `test -f ~/.kimi-code/server.token && echo "token file exists" || echo "token file missing"`, or a hint when the token comes from `KIMI_SERVER_TOKEN`
   - if the bridge/plugin was just changed: `pnpm build` and `codex plugin add kimi-delegate@codex-kimi-bridge-local`
 - `diagnostics`: technical messages from the latest live checks. Token values are never included.

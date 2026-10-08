@@ -15,6 +15,7 @@ export interface BridgeConfig {
   envServerToken?: string;
   autoStart: boolean;
   kimiCommand: string;
+  kimiServerArgs?: string[];
   preflightCacheMs: number;
   kimiCodeHome?: string;
   stateDir: string;
@@ -37,6 +38,21 @@ function parseRequestTimeoutMs(raw: string | undefined): number {
 function parsePreflightCacheMs(raw: string | undefined): number {
   const parsed = Number.parseInt(raw ?? '5000', 10);
   if (Number.isNaN(parsed) || parsed < 0) return 5000;
+  return parsed;
+}
+
+function parseKimiServerArgs(raw: string | undefined): string[] | undefined {
+  if (!raw?.trim()) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error('KIMI_SERVER_ARGS must be a non-empty JSON array of non-blank strings.');
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0 ||
+      !parsed.every((arg): arg is string => typeof arg === 'string' && arg.trim().length > 0)) {
+    throw new Error('KIMI_SERVER_ARGS must be a non-empty JSON array of non-blank strings.');
+  }
   return parsed;
 }
 
@@ -88,6 +104,7 @@ export function loadBridgeConfig(env: NodeJS.ProcessEnv = process.env): BridgeCo
     envServerToken: env.KIMI_SERVER_TOKEN,
     autoStart: !(env.KIMI_AUTO_START === 'false' || env.KIMI_AUTO_START === '0'),
     kimiCommand: env.KIMI_COMMAND && env.KIMI_COMMAND.trim().length > 0 ? env.KIMI_COMMAND.trim() : 'kimi',
+    kimiServerArgs: parseKimiServerArgs(env.KIMI_SERVER_ARGS),
     preflightCacheMs: parsePreflightCacheMs(env.KIMI_PREFLIGHT_CACHE_MS),
     kimiCodeHome,
     stateDir: env.KIMI_BRIDGE_STATE_DIR && env.KIMI_BRIDGE_STATE_DIR.trim().length > 0

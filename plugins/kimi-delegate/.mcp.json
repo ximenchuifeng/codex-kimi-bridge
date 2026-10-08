@@ -14,7 +14,8 @@
         "KIMI_COMMAND": "kimi",
         "KIMI_PREFLIGHT_CACHE_MS": "5000",
         "KIMI_CODE_HOME": "",
-        "KIMI_SERVER_TOKEN": ""
+        "KIMI_SERVER_TOKEN": "",
+        "KIMI_SERVER_ARGS": "[\"web\",\"--no-open\",\"--port\",\"58627\"]"
       }
     }
   }

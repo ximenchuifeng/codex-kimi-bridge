@@ -8,6 +8,7 @@ describe('loadBridgeConfig', () => {
   it('uses safe defaults', () => {
     const tmpHome = mkdtempSync(join(tmpdir(), 'kimi-bridge-test-'));
     vi.stubEnv('HOME', tmpHome);
+    vi.stubEnv('USERPROFILE', tmpHome);
     try {
       expect(loadBridgeConfig({})).toEqual({
         serverUrl: 'http://127.0.0.1:58627',
@@ -20,6 +21,7 @@ describe('loadBridgeConfig', () => {
         envServerToken: undefined,
         autoStart: true,
         kimiCommand: 'kimi',
+        kimiServerArgs: undefined,
         preflightCacheMs: 5000,
         kimiCodeHome: undefined,
         stateDir: join(tmpHome, '.codex-kimi-bridge', 'state'),
@@ -59,9 +61,25 @@ describe('loadBridgeConfig', () => {
     expect(loadBridgeConfig({ KIMI_CODE_HOME: '/custom/home' }).kimiCodeHome).toBe('/custom/home');
   });
 
+  it('parses explicit server arguments for modern Kimi without shell splitting', () => {
+    expect(loadBridgeConfig({
+      KIMI_SERVER_ARGS: '["web","--no-open","--port","58627"]',
+    }).kimiServerArgs).toEqual(['web', '--no-open', '--port', '58627']);
+    expect(loadBridgeConfig({}).kimiServerArgs).toBeUndefined();
+    expect(loadBridgeConfig({ KIMI_SERVER_ARGS: '   ' }).kimiServerArgs).toBeUndefined();
+  });
+
+  it.each(['not-json', '{}', '[]', '["web",1]', '["web",""]', '["web","   "]'])(
+    'rejects invalid KIMI_SERVER_ARGS: %s',
+    (args) => {
+      expect(() => loadBridgeConfig({ KIMI_SERVER_ARGS: args })).toThrow(/KIMI_SERVER_ARGS/);
+    },
+  );
+
   it('uses KIMI_BRIDGE_STATE_DIR or a home-based default', () => {
     const tmpHome = mkdtempSync(join(tmpdir(), 'kimi-bridge-test-'));
     vi.stubEnv('HOME', tmpHome);
+    vi.stubEnv('USERPROFILE', tmpHome);
     try {
       expect(loadBridgeConfig({}).stateDir).toBe(join(tmpHome, '.codex-kimi-bridge', 'state'));
       expect(loadBridgeConfig({ KIMI_BRIDGE_STATE_DIR: '/custom/state' }).stateDir).toBe('/custom/state');
@@ -77,6 +95,7 @@ describe('loadBridgeConfig', () => {
     beforeEach(() => {
       tmpHome = mkdtempSync(join(tmpdir(), 'kimi-bridge-test-'));
       vi.stubEnv('HOME', tmpHome);
+      vi.stubEnv('USERPROFILE', tmpHome);
     });
 
     afterEach(() => {

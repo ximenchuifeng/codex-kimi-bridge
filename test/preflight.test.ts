@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChildProcess } from 'node:child_process';
 import { KimiApiError, KimiNetworkError } from '../src/errors.js';
 import type { KimiHttpClient } from '../src/kimi/http.js';
-import { KimiPreflight, type BridgeStatus } from '../src/preflight.js';
+import { KimiPreflight, type BridgeStatus, type PreflightOptions } from '../src/preflight.js';
 import type { BridgeConfig } from '../src/config.js';
 import { loadBridgeConfig } from '../src/config.js';
 
@@ -92,6 +92,7 @@ describe('KimiPreflight', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it('returns ok when healthz and config succeed', async () => {
@@ -105,7 +106,7 @@ describe('KimiPreflight', () => {
 
   it('starts the server when healthz fails and autoStart is true', async () => {
     const http = makeHttp({ healthz: ['error', 'error', 'ok'], config: ['ok'] });
-    const spawn = vi.fn(() => makeFakeChildProcess());
+    const spawn = vi.fn<NonNullable<PreflightOptions['spawn']>>(() => makeFakeChildProcess());
     const preflight = new KimiPreflight(makeConfig({ autoStart: true }), http, { spawn, pollIntervalMs: 10 });
 
     const promise = preflight.ensureReady();
@@ -113,15 +114,79 @@ describe('KimiPreflight', () => {
     const result = await promise;
 
     expect(result.healthzOk).toBe(true);
-    expect(spawn).toHaveBeenCalledWith('kimi', ['server', 'run', '--keep-alive'], {
+    expect(spawn).toHaveBeenCalledWith('kimi', ['server', 'run', '--keep-alive'], expect.objectContaining({
       detached: true,
       stdio: 'ignore',
-    });
+      windowsHide: true,
+    }));
+  });
+
+  it('starts modern Kimi in a hidden background process with the configured arguments', async () => {
+    const http = makeHttp({ healthz: ['error', 'ok'], config: ['ok'] });
+    const spawn = vi.fn<NonNullable<PreflightOptions['spawn']>>(() => makeFakeChildProcess());
+    const args = ['web', '--no-open', '--port', '58627'];
+    const preflight = new KimiPreflight(makeConfig({ kimiServerArgs: args }), http, { spawn, pollIntervalMs: 10 });
+
+    const promise = preflight.ensureReady();
+    await vi.advanceTimersByTimeAsync(100);
+    expect((await promise).status).toBe('ready');
+    expect(spawn).toHaveBeenCalledWith('kimi', args, expect.objectContaining({
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    }));
+  });
+
+  it('reuses a healthy server without spawning modern Kimi', async () => {
+    const http = makeHttp({ healthz: ['ok'], config: ['ok'] });
+    const spawn = vi.fn<NonNullable<PreflightOptions['spawn']>>(() => makeFakeChildProcess());
+    const preflight = new KimiPreflight(
+      makeConfig({ kimiServerArgs: ['web', '--no-open'] }), http, { spawn },
+    );
+    expect((await preflight.ensureReady()).status).toBe('ready');
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('shows the configured modern startup command without starting a server', async () => {
+    const http = makeHttp({ healthz: ['error'] });
+    const spawn = vi.fn<NonNullable<PreflightOptions['spawn']>>(() => makeFakeChildProcess());
+    const args = ['web', '--no-open', '--port', '58627'];
+    const preflight = new KimiPreflight(makeConfig({ kimiServerArgs: args }), http, { spawn });
+    const status = await preflight.getStatus();
+    expect(status.status).toBe('server_unreachable');
+    expect(status.commands).toContain('kimi web --no-open --port 58627');
+    expect(status.nextActions.some((action) => action.includes('kimi web --no-open --port 58627'))).toBe(true);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('uses the same default data home for token discovery and spawned Kimi when the environment is blank', async () => {
+    vi.stubEnv('KIMI_CODE_HOME', '');
+    const http = makeHttp({ healthz: ['error', 'ok'], config: ['ok'] });
+    const spawn = vi.fn<NonNullable<PreflightOptions['spawn']>>(() => makeFakeChildProcess());
+    const preflight = new KimiPreflight(makeConfig(), http, { spawn, pollIntervalMs: 10 });
+    const promise = preflight.ensureReady();
+    await vi.advanceTimersByTimeAsync(100);
+    expect((await promise).status).toBe('ready');
+    const options = vi.mocked(spawn).mock.calls[0][2];
+    expect(options.env?.KIMI_CODE_HOME).toBe(join(homedir(), '.kimi-code'));
+  });
+
+  it('passes a configured data home to spawned Kimi', async () => {
+    vi.stubEnv('KIMI_CODE_HOME', '');
+    const http = makeHttp({ healthz: ['error', 'ok'], config: ['ok'] });
+    const spawn = vi.fn<NonNullable<PreflightOptions['spawn']>>(() => makeFakeChildProcess());
+    const codeHome = join(homedir(), 'Custom Kimi Home');
+    const preflight = new KimiPreflight(makeConfig({ kimiCodeHome: codeHome }), http, { spawn, pollIntervalMs: 10 });
+    const promise = preflight.ensureReady();
+    await vi.advanceTimersByTimeAsync(100);
+    expect((await promise).status).toBe('ready');
+    const options = vi.mocked(spawn).mock.calls[0][2];
+    expect(options.env?.KIMI_CODE_HOME).toBe(codeHome);
   });
 
   it('does not start the server when autoStart is false', async () => {
     const http = makeHttp({ healthz: ['error'] });
-    const spawn = vi.fn(() => makeFakeChildProcess());
+    const spawn = vi.fn<NonNullable<PreflightOptions['spawn']>>(() => makeFakeChildProcess());
     const preflight = new KimiPreflight(makeConfig({ autoStart: false }), http, { spawn });
 
     await expect(preflight.ensureReady()).rejects.toThrow(/auto-start disabled|not reachable/);
@@ -130,7 +195,7 @@ describe('KimiPreflight', () => {
 
   it('times out when the server never becomes healthy', async () => {
     const http = makeHttp({ healthz: ['error', 'error', 'error', 'error'] });
-    const spawn = vi.fn(() => makeFakeChildProcess());
+    const spawn = vi.fn<NonNullable<PreflightOptions['spawn']>>(() => makeFakeChildProcess());
     const preflight = new KimiPreflight(makeConfig({ autoStart: true }), http, {
       spawn,
       startupTimeoutMs: 100,
@@ -193,7 +258,7 @@ describe('KimiPreflight', () => {
 
   it('getStatus does not auto-start and returns diagnostics', async () => {
     const http = makeHttp({ healthz: ['error'] });
-    const spawn = vi.fn(() => makeFakeChildProcess());
+    const spawn = vi.fn<NonNullable<PreflightOptions['spawn']>>(() => makeFakeChildProcess());
     const preflight = new KimiPreflight(makeConfig({ autoStart: true }), http, { spawn });
 
     const status = await preflight.getStatus();
@@ -222,7 +287,7 @@ describe('KimiPreflight', () => {
 
   it('getStatus returns server_unreachable with auto-start hint when autoStart is true', async () => {
     const http = makeHttp({ healthz: ['error'] });
-    const spawn = vi.fn(() => makeFakeChildProcess());
+    const spawn = vi.fn<NonNullable<PreflightOptions['spawn']>>(() => makeFakeChildProcess());
     const preflight = new KimiPreflight(makeConfig({ autoStart: true }), http, { spawn, pollIntervalMs: 10 });
 
     const status = await preflight.getStatus();
@@ -236,7 +301,7 @@ describe('KimiPreflight', () => {
 
   it('getStatus returns server_unreachable with manual start hint when autoStart is false', async () => {
     const http = makeHttp({ healthz: ['error'] });
-    const spawn = vi.fn(() => makeFakeChildProcess());
+    const spawn = vi.fn<NonNullable<PreflightOptions['spawn']>>(() => makeFakeChildProcess());
     const preflight = new KimiPreflight(makeConfig({ autoStart: false }), http, { spawn });
 
     const status = await preflight.getStatus();
@@ -302,7 +367,7 @@ describe('KimiPreflight', () => {
 
     it('includes the start command when server is unreachable and autoStart is false', async () => {
       const http = makeHttp({ healthz: ['error'] });
-      const spawn = vi.fn(() => makeFakeChildProcess());
+      const spawn = vi.fn<NonNullable<PreflightOptions['spawn']>>(() => makeFakeChildProcess());
       const preflight = new KimiPreflight(
         makeConfig({ autoStart: false, kimiCommand: 'kimi' }),
         http,
@@ -317,7 +382,7 @@ describe('KimiPreflight', () => {
 
     it('includes the keep-alive command using the configured kimiCommand when server is unreachable and autoStart is true', async () => {
       const http = makeHttp({ healthz: ['error'] });
-      const spawn = vi.fn(() => makeFakeChildProcess());
+      const spawn = vi.fn<NonNullable<PreflightOptions['spawn']>>(() => makeFakeChildProcess());
       const preflight = new KimiPreflight(
         makeConfig({ autoStart: true, kimiCommand: 'mykimi' }),
         http,
@@ -328,6 +393,20 @@ describe('KimiPreflight', () => {
       expect(status.status).toBe('server_unreachable');
       expect(status.commands).toContain('mykimi server run --keep-alive');
       expect(spawn).not.toHaveBeenCalled();
+    });
+
+    it('formats a quoted Windows executable and arguments as a PowerShell command', async () => {
+      const http = makeHttp({ healthz: ['error'] });
+      const command = 'C:\\Program Files\\Kimi Code\\kimi.exe';
+      const preflight = new KimiPreflight(makeConfig({
+        kimiCommand: command,
+        kimiServerArgs: ['web', '--no-open', '--web-title', "Kimi's bridge"],
+      }), http);
+      const status = await preflight.getStatus();
+      const expected = process.platform === 'win32'
+        ? "& 'C:\\Program Files\\Kimi Code\\kimi.exe' web --no-open --web-title 'Kimi''s bridge'"
+        : shellQuote(command) + ' web --no-open --web-title ' + shellQuote("Kimi's bridge");
+      expect(status.commands).toContain(expected);
     });
 
     it('includes a safe token file check command when auth fails', async () => {
@@ -361,7 +440,7 @@ describe('KimiPreflight', () => {
 
     it('shell-quotes kimiCommand with spaces in server_unreachable commands', async () => {
       const http = makeHttp({ healthz: ['error'] });
-      const spawn = vi.fn(() => makeFakeChildProcess());
+      const spawn = vi.fn<NonNullable<PreflightOptions['spawn']>>(() => makeFakeChildProcess());
       const preflight = new KimiPreflight(
         makeConfig({ autoStart: false, kimiCommand: 'my kimi' }),
         http,
@@ -370,13 +449,15 @@ describe('KimiPreflight', () => {
 
       const status = await preflight.getStatus();
       expect(status.status).toBe('server_unreachable');
-      expect(status.commands).toContain(`${shellQuote('my kimi')} server start`);
+      expect(status.commands).toContain(process.platform === 'win32'
+        ? "& 'my kimi' server start"
+        : shellQuote('my kimi') + ' server start');
       expect(spawn).not.toHaveBeenCalled();
     });
 
     it('shell-quotes kimiCommand with single quotes in server_unreachable commands', async () => {
       const http = makeHttp({ healthz: ['error'] });
-      const spawn = vi.fn(() => makeFakeChildProcess());
+      const spawn = vi.fn<NonNullable<PreflightOptions['spawn']>>(() => makeFakeChildProcess());
       const preflight = new KimiPreflight(
         makeConfig({ autoStart: true, kimiCommand: "ki'mi" }),
         http,
@@ -385,7 +466,9 @@ describe('KimiPreflight', () => {
 
       const status = await preflight.getStatus();
       expect(status.status).toBe('server_unreachable');
-      expect(status.commands).toContain(`${shellQuote("ki'mi")} server run --keep-alive`);
+      expect(status.commands).toContain(process.platform === 'win32'
+        ? "& 'ki''mi' server run --keep-alive"
+        : shellQuote("ki'mi") + ' server run --keep-alive');
       expect(spawn).not.toHaveBeenCalled();
     });
 
@@ -463,7 +546,7 @@ describe('KimiPreflight', () => {
 
     it('caches the successful result after auto-starting the server', async () => {
       const http = makeHttp({ healthz: ['error', 'ok'], config: ['ok'] });
-      const spawn = vi.fn(() => makeFakeChildProcess());
+      const spawn = vi.fn<NonNullable<PreflightOptions['spawn']>>(() => makeFakeChildProcess());
       let time = 0;
       const preflight = new KimiPreflight(makeConfig({ preflightCacheMs: 5000, autoStart: true }), http, {
         spawn,

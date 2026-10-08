@@ -27,7 +27,7 @@ export interface BridgeStatus {
 }
 
 export interface PreflightOptions {
-  spawn?: (command: string, args: readonly string[], options: { detached: boolean; stdio: 'ignore' }) => ChildProcess;
+  spawn?: (command: string, args: readonly string[], options: { detached: boolean; stdio: 'ignore'; windowsHide: boolean; env: NodeJS.ProcessEnv }) => ChildProcess;
   resolveToken?: (config: BridgeConfig) => { token?: string; source: TokenSource };
   now?: () => number;
   startupTimeoutMs?: number;
@@ -163,6 +163,18 @@ export class KimiPreflight {
     };
   }
 
+  private startupCommand(manual = false): string {
+    const args = this.config.kimiServerArgs ??
+      (manual ? ['server', 'start'] : ['server', 'run', '--keep-alive']);
+    if (process.platform !== 'win32') {
+      return [this.config.kimiCommand, ...args].map(shellQuote).join(' ');
+    }
+    const parts = [this.config.kimiCommand, ...args].map((arg) =>
+      /^[A-Za-z0-9_/.-]+$/.test(arg) ? arg : "'" + arg.replace(/'/g, "''") + "'",
+    );
+    return (parts[0].startsWith("'") ? '& ' : '') + parts.join(' ');
+  }
+
   private buildNextActions(status: BridgeStatus['status']): string[] {
     if (status === 'ready') {
       return [
@@ -174,11 +186,11 @@ export class KimiPreflight {
       if (this.config.autoStart) {
         return [
           '下一次任务调用会自动尝试启动 Kimi server。',
-          '也可以手动运行：kimi server run --keep-alive',
+          `也可以手动运行：${this.startupCommand()}`,
         ];
       }
       return [
-        '请手动启动 Kimi server，例如：kimi server run --keep-alive',
+        `请手动启动 Kimi server，例如：${this.startupCommand(true)}`,
         '或设置 KIMI_AUTO_START=true 让 bridge 在需要时自动启动。',
       ];
     }
@@ -197,9 +209,9 @@ export class KimiPreflight {
 
     if (status === 'server_unreachable') {
       if (this.config.autoStart) {
-        commands.push(`${shellQuote(this.config.kimiCommand)} server run --keep-alive`);
+        commands.push(this.startupCommand());
       } else {
-        commands.push(`${shellQuote(this.config.kimiCommand)} server start`);
+        commands.push(this.startupCommand(true));
       }
     }
 
@@ -255,11 +267,15 @@ export class KimiPreflight {
   private async startServer(): Promise<void> {
     return new Promise((resolve, reject) => {
       let settled = false;
-      // `kimi server run` keeps the server in the foreground; it does not open a web UI by default,
-      // so no --no-open flag is needed.
-      const child = this.spawnImpl(this.config.kimiCommand, ['server', 'run', '--keep-alive'], {
+      const args = this.config.kimiServerArgs ?? ['server', 'run', '--keep-alive'];
+      const child = this.spawnImpl(this.config.kimiCommand, args, {
         detached: true,
         stdio: 'ignore',
+        windowsHide: true,
+        env: {
+          ...process.env,
+          KIMI_CODE_HOME: this.config.kimiCodeHome ?? join(homedir(), '.kimi-code'),
+        },
       });
 
       const finish = (error?: Error) => {
